@@ -10,6 +10,11 @@
 .nvimlog
 Session.vim
 
+# Sites hosting build
+/.next/
+/node_modules/
+npm-debug.log*
+
 # Operating system files
 .DS_Store
 Thumbs.db

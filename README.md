@@ -6,11 +6,11 @@
 
 A keyboard-first Git workspace built entirely in Lua.
 
-[Quick demo](#quick-demo) · [Installation](#installation) · [Key mappings](#key-mappings) · [Project site](site/index.html)
+[Quick demo](#quick-demo) · [Installation](#installation) · [Key mappings](#key-mappings) · [Project site](public/site/index.html)
 
 </div>
 
-![Vigit one-file diff](site/assets/vigit-one-file.png)
+![Vigit one-file diff](public/site/assets/vigit-one-file.png)
 
 ## Why Vigit
 
@@ -144,8 +144,10 @@ workspace, so `Q` remains available after navigating to another file.
 
 ## Project site
 
-The minimal static project card lives in [`site/`](site/index.html). It shares
-the repository screenshots and is ready for a real WebM or MP4 demo recording.
+The project card lives in [`public/site/`](public/site/index.html). It remains
+plain HTML and CSS; the repository root only adds the minimal hosting wrapper
+required by Sites. The page shares the repository screenshots and is ready for
+a real WebM or MP4 demo recording.
 
 ## Roadmap
 
