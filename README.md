@@ -6,7 +6,7 @@
 
 A keyboard-first Git workspace built entirely in Lua.
 
-[Quick demo](#quick-demo) · [Installation](#installation) · [Key mappings](#key-mappings) · [Project site](public/site/index.html)
+[Live site](https://vigit-neovim.gentostage.chatgpt.site) · [Quick demo](#quick-demo) · [Installation](#installation) · [Key mappings](#key-mappings)
 
 </div>
 
@@ -144,10 +144,11 @@ workspace, so `Q` remains available after navigating to another file.
 
 ## Project site
 
-The project card lives in [`public/site/`](public/site/index.html). It remains
-plain HTML and CSS; the repository root only adds the Vinext hosting wrapper
-required by Sites. The page shares the repository screenshots and is ready for
-a real WebM or MP4 demo recording.
+The [live project card](https://vigit-neovim.gentostage.chatgpt.site) is built
+from [`public/site/`](public/site/index.html). It remains plain HTML and CSS;
+the repository root only adds the Vinext hosting wrapper required by Sites.
+The page shares the repository screenshots and is ready for a real WebM or MP4
+demo recording.
 
 ## Roadmap
 
