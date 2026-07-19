@@ -1,0 +1,291 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta
+      name="description"
+      content="Vigit is a keyboard-first Neovim workspace for reviewing, editing, staging, and unstaging Git changes."
+    >
+    <meta name="theme-color" content="#07100d">
+    <title>Vigit — Git changes, inside Neovim</title>
+    <link rel="stylesheet" href="styles.css">
+  </head>
+  <body>
+    <div class="ambient ambient-one" aria-hidden="true"></div>
+    <div class="ambient ambient-two" aria-hidden="true"></div>
+
+    <header class="hero shell">
+      <nav class="nav" aria-label="Primary navigation">
+        <a class="brand" href="#top" aria-label="Vigit home">
+          <span class="brand-mark" aria-hidden="true">V</span>
+          <span>Vigit</span>
+        </a>
+        <div class="nav-links">
+          <a href="#features">Features</a>
+          <a href="#workflow">Workflow</a>
+          <a href="#gallery">Gallery</a>
+          <a
+            class="nav-github"
+            href="https://github.com/Gentostage/vigit"
+          >GitHub <span aria-hidden="true">↗</span></a>
+        </div>
+      </nav>
+
+      <div class="hero-grid" id="top">
+        <div class="hero-copy-wrap">
+          <p class="eyebrow"><span></span> Git changes, inside Neovim</p>
+          <h1>Stay in flow.<br><em>Ship with clarity.</em></h1>
+          <p class="hero-copy">
+            Vigit turns staged and unstaged changes into a focused,
+            keyboard-first workspace — review, navigate, edit, and build your
+            index without leaving Neovim.
+          </p>
+          <div class="hero-actions">
+            <a
+              class="button button-primary"
+              href="https://github.com/Gentostage/vigit"
+            >View on GitHub <span aria-hidden="true">↗</span></a>
+            <a class="button button-ghost" href="#quick-start">Quick start</a>
+          </div>
+          <dl class="hero-stats">
+            <div>
+              <dt>100%</dt>
+              <dd>Lua</dd>
+            </div>
+            <div>
+              <dt>2</dt>
+              <dd>File views</dd>
+            </div>
+            <div>
+              <dt>0</dt>
+              <dd>Runtime deps</dd>
+            </div>
+          </dl>
+        </div>
+
+        <div class="terminal-card" aria-label="Vigit terminal preview">
+          <div class="terminal-bar">
+            <span class="terminal-lights" aria-hidden="true">
+              <i></i><i></i><i></i>
+            </span>
+            <span>vigit · one file</span>
+            <span class="terminal-state">● live</span>
+          </div>
+          <div class="terminal-media">
+            <img
+              src="assets/vigit-one-file.png"
+              alt="Vigit showing a focused file diff and the changes panel"
+            >
+          </div>
+        </div>
+      </div>
+    </header>
+
+    <main>
+      <section class="marquee" aria-label="Vigit capabilities">
+        <div>
+          <span>STAGED</span> · UNSTAGED · ONE FILE · ALL FILES · TREE · LIST ·
+          EDIT · STAGE HUNK · UNSTAGE HUNK · <span>STAGED</span> · UNSTAGED ·
+        </div>
+      </section>
+
+      <section class="section shell" id="features">
+        <div class="section-heading">
+          <p class="eyebrow"><span></span> Built for the review loop</p>
+          <h2>Git context without<br>the context switch.</h2>
+          <p>
+            Every part of the interface is designed to keep the current
+            decision visible: what changed, where it lives, and whether it
+            belongs in the next commit.
+          </p>
+        </div>
+
+        <div class="feature-grid">
+          <article class="feature feature-wide">
+            <div class="feature-index">01</div>
+            <div>
+              <p class="feature-label staged">INDEX CONTROL</p>
+              <h3>Stage with intent.</h3>
+              <p>
+                Add an unstaged file or hunk to the index — or remove a staged
+                one — with the same mapping and immediate visual feedback.
+              </p>
+            </div>
+            <div class="index-demo" aria-hidden="true">
+              <span class="index-file"><b>M</b> calculator.lua</span>
+              <span class="index-arrow">→</span>
+              <span class="index-state">STAGED</span>
+            </div>
+          </article>
+
+          <article class="feature">
+            <div class="feature-index">02</div>
+            <p class="feature-label cyan">NAVIGATION</p>
+            <h3>List or tree. Your call.</h3>
+            <p>
+              Use compact unique filenames or a collapsible tree that folds
+              long directory chains.
+            </p>
+            <div class="mini-tree" aria-hidden="true">
+              <span>⌄ lua/demo/</span>
+              <span>　⌄ features/</span>
+              <span class="tree-file">　　M calculator.lua</span>
+              <span class="tree-file">　　A format.lua</span>
+            </div>
+          </article>
+
+          <article class="feature">
+            <div class="feature-index">03</div>
+            <p class="feature-label unstaged">FOCUS</p>
+            <h3>One file or every file.</h3>
+            <p>
+              Scroll the complete change set, then focus one file and preview
+              the next selection as you move.
+            </p>
+            <div class="mode-switch" aria-hidden="true">
+              <span>ALL FILES</span>
+              <span class="active">ONE FILE</span>
+            </div>
+          </article>
+
+          <article class="feature feature-wide edit-feature">
+            <div class="feature-index">04</div>
+            <div>
+              <p class="feature-label cyan">REAL BUFFERS</p>
+              <h3>Review, then edit for real.</h3>
+              <p>
+                Open the selected path in a normal modifiable Neovim tab.
+                Filetype, syntax, LSP, mappings, and plugins stay yours. Save,
+                press <kbd>Q</kbd>, and return to a refreshed diff.
+              </p>
+            </div>
+            <div class="edit-sequence" aria-label="Edit workflow">
+              <span>diff</span>
+              <b>e</b>
+              <span>edit</span>
+              <b>Q</b>
+              <span>refresh</span>
+            </div>
+          </article>
+        </div>
+      </section>
+
+      <section class="section workflow-section" id="workflow">
+        <div class="shell">
+          <div class="section-heading compact">
+            <p class="eyebrow"><span></span> A small, complete loop</p>
+            <h2>Everything has a way back.</h2>
+          </div>
+          <ol class="workflow">
+            <li>
+              <span class="step-number">01</span>
+              <strong>Scan</strong>
+              <p>Review staged and unstaged changes as one coherent workspace.</p>
+              <kbd>j / k</kbd>
+            </li>
+            <li>
+              <span class="step-number">02</span>
+              <strong>Focus</strong>
+              <p>Open the selected file and keep the changes list in reach.</p>
+              <kbd>Enter</kbd>
+            </li>
+            <li>
+              <span class="step-number">03</span>
+              <strong>Edit</strong>
+              <p>Work in a normal Neovim buffer with your existing setup.</p>
+              <kbd>e</kbd>
+            </li>
+            <li>
+              <span class="step-number">04</span>
+              <strong>Index</strong>
+              <p>Stage or unstage the current file or hunk, then keep moving.</p>
+              <kbd>s</kbd>
+            </li>
+          </ol>
+        </div>
+      </section>
+
+      <section class="section shell gallery-section" id="gallery">
+        <div class="section-heading compact">
+          <p class="eyebrow"><span></span> Interface gallery</p>
+          <h2>Dense when it matters.<br>Quiet everywhere else.</h2>
+        </div>
+
+        <div class="gallery">
+          <figure class="gallery-primary">
+            <img
+              src="assets/vigit-one-file.png"
+              alt="Vigit one-file diff with a compact changes list"
+              loading="lazy"
+            >
+            <figcaption>
+              <span>01 / Focused diff</span>
+              <span>Single-file preview</span>
+            </figcaption>
+          </figure>
+          <figure>
+            <img
+              src="assets/vigit-tree.png"
+              alt="Vigit showing a long file diff and a compact tree"
+              loading="lazy"
+            >
+            <figcaption>
+              <span>02 / Tree view</span>
+              <span>Collapsed paths</span>
+            </figcaption>
+          </figure>
+        </div>
+      </section>
+
+      <section class="section shell demo-section" id="demo">
+        <div class="demo-card">
+          <div class="demo-poster">
+            <img
+              src="assets/vigit-one-file.png"
+              alt=""
+              loading="lazy"
+            >
+            <span class="play" aria-hidden="true">▶</span>
+          </div>
+          <div class="demo-copy">
+            <p class="feature-label unstaged">RECORDED WALKTHROUGH</p>
+            <h2>Demo video coming soon.</h2>
+            <p>
+              The first project card ships with real interface screenshots.
+              A short keyboard-driven WebM/MP4 walkthrough is the next media
+              update.
+            </p>
+          </div>
+        </div>
+      </section>
+
+      <section class="section shell quick-start" id="quick-start">
+        <div>
+          <p class="eyebrow"><span></span> Try the complete fixture</p>
+          <h2>From clone to diff<br>in one command.</h2>
+        </div>
+        <div class="command-card">
+          <span class="command-label">TERMINAL</span>
+          <code><i>$</i> ./scripts/demo.sh</code>
+          <p>
+            Generates staged, unstaged, deleted, untracked, deeply nested, and
+            long-file changes in a disposable repository.
+          </p>
+          <a href="https://github.com/Gentostage/vigit#quick-demo">
+            Read the quick start <span aria-hidden="true">→</span>
+          </a>
+        </div>
+      </section>
+    </main>
+
+    <footer class="footer shell">
+      <a class="brand" href="#top">
+        <span class="brand-mark" aria-hidden="true">V</span>
+        <span>Vigit</span>
+      </a>
+      <p>Git changes, inside Neovim.</p>
+      <a href="https://github.com/Gentostage/vigit">GitHub ↗</a>
+    </footer>
+  </body>
+</html>
