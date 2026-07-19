@@ -145,9 +145,9 @@ workspace, so `Q` remains available after navigating to another file.
 ## Project site
 
 The project card lives in [`public/site/`](public/site/index.html). It remains
-plain HTML and CSS; the repository root only adds a dependency-free build step
-that prepares the `dist/` directory required by Sites. The page shares the
-repository screenshots and is ready for a real WebM or MP4 demo recording.
+plain HTML and CSS; the repository root only adds the Vinext hosting wrapper
+required by Sites. The page shares the repository screenshots and is ready for
+a real WebM or MP4 demo recording.
 
 ## Roadmap
 
