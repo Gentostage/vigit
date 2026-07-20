@@ -37,7 +37,7 @@ local function entry_line(entry, width)
     stats[#stats + 1] = "?:" .. entry.untracked
   end
   if entry.review_count > 0 then
-    stats[#stats + 1] = "R:" .. entry.review_count
+    stats[#stats + 1] = "C:" .. entry.review_count
   end
   if entry.open then
     stats[#stats + 1] = "OPEN"

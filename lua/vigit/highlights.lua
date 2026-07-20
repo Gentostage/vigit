@@ -104,6 +104,7 @@ function M.setup()
   set_link("VigitLuaNumber", "Number")
   set_link("VigitLuaComment", "Comment")
   set_link("VigitLuaFunction", "Function")
+  set_link("VigitCommentMarker", "DiagnosticInfo")
   setup_diff_backgrounds()
 end
 
@@ -313,32 +314,65 @@ local function decorate_diff_buffer(buf, win, lines, diff_map)
   end
 end
 
+local function decorate_comment_markers(session)
+  local width = vim.api.nvim_win_is_valid(session.diff_win) and vim.api.nvim_win_get_width(session.diff_win) or 80
+  local max_label_width = math.max(24, math.min(64, math.floor(width * 0.48)))
+  local rows = {}
+  for _, comment in ipairs(session.review_comments or {}) do
+    local row = session.state:diff_line_for_anchor(comment)
+    if row then
+      rows[row] = rows[row] or {}
+      rows[row][#rows[row] + 1] = comment
+    end
+  end
+  for row, comments in pairs(rows) do
+    local prefix = #comments == 1 and ("● " .. comments[1].id) or ("● " .. #comments .. " comments")
+    local preview = vim.trim(tostring(comments[1].comment or ""):gsub("%s+", " "))
+    local available = math.max(max_label_width - vim.fn.strdisplaywidth(prefix .. " · ") - 1, 0)
+    if vim.fn.strdisplaywidth(preview) > available then
+      preview = vim.fn.strcharpart(preview, 0, available)
+      while preview ~= "" and vim.fn.strdisplaywidth(preview) > available do
+        preview = vim.fn.strcharpart(preview, 0, vim.fn.strchars(preview) - 1)
+      end
+      preview = preview .. "…"
+    end
+    local label = preview ~= "" and (prefix .. " · " .. preview) or prefix
+    vim.api.nvim_buf_set_extmark(session.diff_buf, namespace, row - 1, 0, {
+      virt_text = { { "  " .. label, "VigitCommentMarker" } },
+      virt_text_pos = "eol",
+      hl_mode = "combine",
+      priority = 40,
+    })
+  end
+end
+
 function M.decorate(session)
   local selected = session.state:selected_file()
   local diff_title = "DIFF · ALL FILES"
   local diff_detail = nil
-  local diff_hint = "↵ file · e edit · s index · f context · q close"
+  local diff_hint = "↵ file · e file · c add/edit comment · C comments · P prompt · s index · q close"
   if selected then
     diff_title = "DIFF · ONE FILE"
     diff_detail = selected.path
-    diff_hint = "e edit · a all · s index · f context · q close"
+    diff_hint = "e file · a all · c add/edit comment · C comments · P prompt · s index · q close"
   end
 
   decorate_window(
     session.changes_win,
     "CHANGES · " .. string.upper(session.state.changes_mode),
     "VigitChangesNormal",
-    "[w worktrees] [c comment] [C reviews] [t] [↵] [e] [s] [r] [q]",
-    session.worktree_name .. " · " .. session.branch .. " · " .. tostring(session.review_count or 0) .. " review"
+    "w worktrees · c comment · C comments · P prompt · t tree · ↵ file · q close",
+    session.worktree_name .. " · " .. session.branch .. " · " .. tostring(session.review_count or 0) .. " comments"
   )
   local worktree_detail =
-    session.worktree_name .. " · " .. session.branch .. " · " .. tostring(session.review_count or 0) .. " review"
+    session.worktree_name .. " · " .. session.branch .. " · " .. tostring(session.review_count or 0) .. " comments"
   if diff_detail then
     worktree_detail = worktree_detail .. " · " .. diff_detail
   end
   decorate_window(session.diff_win, diff_title, "VigitDiffNormal", diff_hint, worktree_detail)
   decorate_changes(session)
   decorate_diff_buffer(session.diff_buf, session.diff_win, session.state.diff_lines, session.state.diff_map)
+  decorate_comment_markers(session)
 end
 
 return M

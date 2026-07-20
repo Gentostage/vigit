@@ -98,8 +98,10 @@ end
 
 function M.render(session)
   local review = require("vigit.review")
-  review.sync_markdown(session.root)
-  session.review_count = review.open_count(session.root)
+  local comments, err = review.comments(session.root)
+  session.review_comments = comments or {}
+  session.review_error = err
+  session.review_count = #session.review_comments
   set_lines(session.changes_buf, session.state.changes_lines)
   set_lines(session.diff_buf, session.state.diff_lines)
   highlights.decorate(session)
@@ -107,8 +109,10 @@ end
 
 function M.render_diff(session)
   local review = require("vigit.review")
-  review.sync_markdown(session.root)
-  session.review_count = review.open_count(session.root)
+  local comments, err = review.comments(session.root)
+  session.review_comments = comments or {}
+  session.review_error = err
+  session.review_count = #session.review_comments
   set_lines(session.diff_buf, session.state.diff_lines)
   highlights.decorate(session)
 end
@@ -301,11 +305,15 @@ local function attach_keymaps(session)
     map(session, buf, "e", actions.edit_file)
     map(session, buf, "c", actions.add_review_comment)
     map(session, buf, "C", actions.open_reviews)
+    map(session, buf, "P", actions.prepare_review)
     map(session, buf, "w", actions.open_worktrees)
     map(session, buf, "]w", actions.next_worktree)
     map(session, buf, "[w", actions.previous_worktree)
     map(session, buf, "<CR>", actions.select_file)
   end
+  vim.keymap.set("x", "c", function()
+    actions.add_review_comment(session, { visual = true })
+  end, { buffer = session.diff_buf, silent = true, nowait = true })
   map(session, session.changes_buf, "t", actions.toggle_changes_view)
   map(session, session.changes_buf, "h", actions.collapse_directory)
   map(session, session.changes_buf, "l", actions.expand_directory)
@@ -378,6 +386,8 @@ function M.open(opts)
     diff_win = diff_win,
     vigit_tab = vigit_tab,
     editor = nil,
+    review_comments = {},
+    review_error = nil,
     review_count = 0,
   }
   sessions_by_root[root] = session

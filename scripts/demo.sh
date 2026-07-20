@@ -235,9 +235,15 @@ git -C "$DEMO_DIR" add README.md lua/demo/format.lua "$PIPELINE_PATH" "$FORMATTE
 
 write_large_pipeline working
 
+VIGIT_ROOT="$ROOT_DIR" VIGIT_REVIEW_ROOT="$SECONDARY_DIR" nvim --headless --clean -u NONE \
+  --cmd 'lua vim.opt.runtimepath:prepend(vim.env.VIGIT_ROOT)' \
+  -c 'lua local review=require("vigit.review"); local issue,issue_err=review.add(vim.env.VIGIT_REVIEW_ROOT,{type="COMMENT",file="README.md",line=3,line_end=3,section="unstaged",comment="Clarify why this task is isolated in a linked worktree.",context="An independent AI-agent task running in a linked Git worktree."}); assert(issue,issue_err)' \
+  -c qa
+
 printf 'Vigit demo repository: %s\n' "$DEMO_DIR"
 printf 'Secondary worktree: %s\n' "$SECONDARY_DIR"
 printf '%s\n' 'Try worktrees: press w, select WT demo-secondary, then press Enter.'
+printf '%s\n' 'Try comments: press C in demo-secondary, then Enter/e/d.'
 printf '%s\n' 'Close Neovim to remove it.'
 
 cd "$DEMO_DIR"

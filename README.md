@@ -26,15 +26,17 @@ comments back to coding agents.
   one-file mode.
 - Switch between task worktrees from a modal view with branch and change
   counters.
-- Attach review comments to diff lines and hand them to Codex through a
-  worktree-local file instead of terminal automation.
+- Attach local multi-line comments to exact diff ranges and see their markers
+  next to Git changes.
+- Browse, edit, delete, and hand all comments to Codex through one generated
+  `comments.md` file without terminal or tmux automation.
 
 ## Status
 
 Vigit is an early MVP for hands-on evaluation. File and hunk staging,
-unstaging, tree navigation, one-file preview, editing, and untracked files are
-implemented. Commit, branch, push, pull, log, and side-by-side diff interfaces
-are not available yet.
+unstaging, tree navigation, one-file preview, editing, local comments, and
+untracked files are implemented. Commit, branch, push, pull, log, and
+side-by-side diff interfaces are not available yet.
 
 ## Quick demo
 
@@ -46,10 +48,11 @@ cd vigit
 
 The script creates a temporary Git repository plus a linked `demo-secondary`
 worktree. Together they contain independent staged, unstaged, untracked,
-nested, deleted, and long-file changes. It launches Vigit in a clean Neovim
-session; press `w` to open the picker, where `ROOT` marks the primary checkout
-and `WT` marks linked worktrees. The complete fixture is removed when Neovim
-exits.
+nested, deleted, and long-file changes. The linked worktree also contains a
+local comment attached to its README diff. It launches Vigit in a clean
+Neovim session; press `w` to open the picker, where `ROOT` marks the primary
+checkout and `WT` marks linked worktrees. The complete fixture is removed when
+Neovim exits.
 
 Use your own Neovim configuration:
 
@@ -123,8 +126,10 @@ that must be saved or explicitly discarded.
 | `e` | Edit the selected file in a normal Neovim tab |
 | `w` | Open the worktree picker |
 | `[w` / `]w` | Move between open Vigit worktree tabs |
-| `c` | Add a review comment at the current file or diff line |
-| `C` | Open review issues for the current worktree |
+| `c` | Add a comment, or edit the comment marked on the current diff line |
+| visual `c` | Attach a comment to the selected range in one diff file |
+| `P` | Copy/open a Codex prompt for the current comments |
+| `C` | Open the comment list |
 | `s` | Stage an unstaged file/hunk or unstage a staged file/hunk |
 | `r` | Refresh Git status and diff |
 | `f` | Toggle compact and expanded diff context |
@@ -132,27 +137,48 @@ that must be saved or explicitly discarded.
 | `Q` | Return from the edit tab to Vigit |
 | `:qa!` | Exit Neovim completely |
 
-## AI-agent review workflow
+## Comment workflow
 
-Vigit keeps review data outside the working tree under the current worktree's
-Git metadata:
+Press `c` on a changed line to write one ordinary multi-line comment. Use
+visual `c` to comment on a range inside one file. Save with `:w` or `Ctrl-S`.
+Vigit immediately stores it outside the working tree and shows its ID plus a
+short preview, such as `● VIGIT-001 · Clarify this condition…`, next to the
+anchored diff line. Press `c` on that line again to edit the comment directly.
+When several comments share an anchor, select the one to edit from the popup.
+
+Press `C` for the complete list:
+
+| Key | Action |
+| --- | --- |
+| `<CR>` | Close the list and jump to the comment source in one-file diff |
+| `e` | Edit the selected comment |
+| `d` | Delete it after confirmation |
+| `r` | Refresh comments and Git state |
+| `q` | Close the list |
+
+Structured JSON remains the internal source for editing. After every
+create/edit/delete, Vigit also rebuilds one agent-friendly file:
 
 ```text
-<git-dir>/vigit/review.json
-<git-dir>/vigit/review.md
+<git-common-dir>/vigit/worktrees/<worktree-id>/
+  comments.md
 ```
 
-Add comments with `c`, inspect them with `C`, then install the bundled Codex
-skill once:
+Press `P` to copy a short Codex prompt containing the absolute `comments.md`
+path and exact worktree root. When a clipboard provider is unavailable, Vigit
+opens the prompt in a read-only window where `y` copies it.
+
+Optionally install the bundled Codex skill:
 
 ```vim
 :VigitInstallCodexSkill
 ```
 
-Run `$vigit-review` from Codex in the same worktree. The skill validates each
-comment against current code, applies focused fixes, uses project-defined
-Python verification commands, and updates issue statuses. It does not depend
-on tmux, stage changes, commit, push, or inspect another worktree.
+Use `:VigitInstallCodexSkill!` to replace an older version after confirmation.
+The skill reads `comments.md`, applies focused changes in the exact worktree,
+and reports resolved or blocked IDs. It does not edit the comment file, stage,
+commit, push, or inspect another worktree. Review the resulting diff and delete
+completed comments manually.
 
 Use `:VigitWorktrees` or `w` to open the worktree modal. Selecting a worktree
 focuses its existing Vigit tab or opens a new tab with a tab-local working
@@ -196,5 +222,5 @@ demo recording.
 - Push, pull, and log views.
 - Side-by-side diff mode.
 - Configurable mappings and layout.
-- Rich multi-line review editor and automatic stale-comment re-anchoring.
+- Automatic stale-comment re-anchoring.
 - Recorded demo and richer project gallery.

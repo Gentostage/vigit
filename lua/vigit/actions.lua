@@ -152,12 +152,16 @@ function M.open_worktrees(session)
   require("vigit.worktree_picker").open(session)
 end
 
-function M.add_review_comment(session)
-  require("vigit.review_ui").add_comment(session)
+function M.add_review_comment(session, opts)
+  require("vigit.review_ui").add_comment(session, opts)
 end
 
 function M.open_reviews(session)
   require("vigit.review_ui").open(session)
+end
+
+function M.prepare_review(session)
+  require("vigit.review_ui").prepare(session)
 end
 
 function M.next_worktree()

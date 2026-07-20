@@ -90,6 +90,22 @@ function M.git_dir(cwd)
   return trim(output), nil
 end
 
+function M.common_git_dir(cwd)
+  local output, err = result_or_error(run("rev-parse --path-format=absolute --git-common-dir", cwd))
+  if err then
+    return nil, err
+  end
+  return trim(output), nil
+end
+
+function M.head(cwd)
+  local output, err = result_or_error(run("rev-parse HEAD", cwd))
+  if err then
+    return nil, err
+  end
+  return trim(output), nil
+end
+
 function M.branch(cwd)
   local output, err = result_or_error(run("branch --show-current", cwd))
   if err then

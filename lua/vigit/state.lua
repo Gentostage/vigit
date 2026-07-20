@@ -278,6 +278,32 @@ function State:diff_line_for_file(file)
   return nil
 end
 
+function State:diff_line_for_anchor(comment)
+  if not comment or not comment.file then
+    return nil
+  end
+  local target = tonumber(comment.line) or 1
+  local best_line = nil
+  local best_score = nil
+  for line = 1, #self.diff_lines do
+    local meta = self.diff_map[line]
+    if meta
+      and meta.file
+      and meta.file.path == comment.file
+    then
+      local distance = math.abs((tonumber(meta.target_line) or target) - target)
+      local section_penalty = comment.section and meta.file.section ~= comment.section and 10000 or 0
+      local structural_penalty = meta.kind and 100000 or 0
+      local score = structural_penalty + section_penalty + distance
+      if best_score == nil or score < best_score then
+        best_line = line
+        best_score = score
+      end
+    end
+  end
+  return best_line
+end
+
 function State:hunk_at_line(line)
   local meta = self.diff_map[line]
   if not meta or not meta.hunk then
