@@ -27,9 +27,10 @@ fi
 
 ROOT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
 DEMO_DIR="$(mktemp -d "${TMPDIR:-/tmp}/vigit-demo.XXXXXX")"
+SECONDARY_DIR="${DEMO_DIR}-secondary"
 
 cleanup() {
-  rm -rf -- "$DEMO_DIR"
+  rm -rf -- "$SECONDARY_DIR" "$DEMO_DIR"
 }
 trap cleanup EXIT
 
@@ -143,6 +144,50 @@ write_large_pipeline baseline
 
 git -C "$DEMO_DIR" add README.md lua/demo/calculator.lua lua/demo/legacy.lua "$PIPELINE_PATH"
 git -C "$DEMO_DIR" commit -q -m "demo baseline"
+git -C "$DEMO_DIR" worktree add -q -b demo-secondary "$SECONDARY_DIR"
+
+mkdir -p "$SECONDARY_DIR/lua/demo/tasks" "$SECONDARY_DIR/notes"
+
+printf '%s\n' \
+  '# Secondary worktree' \
+  '' \
+  'An independent AI-agent task running in a linked Git worktree.' \
+  '' \
+  'This branch has its own staged, unstaged, and untracked changes.' > "$SECONDARY_DIR/README.md"
+
+printf '%s\n' \
+  'local M = {}' \
+  '' \
+  'function M.total(items)' \
+  '  local result = 0' \
+  '  for _, value in ipairs(items) do' \
+  '    result = result + value' \
+  '  end' \
+  '  return result' \
+  'end' \
+  '' \
+  'function M.maximum(items)' \
+  '  return math.max(unpack(items))' \
+  'end' \
+  '' \
+  'return M' > "$SECONDARY_DIR/lua/demo/calculator.lua"
+
+printf '%s\n' \
+  'local M = {}' \
+  '' \
+  'function M.describe()' \
+  '  return "secondary worktree task"' \
+  'end' \
+  '' \
+  'return M' > "$SECONDARY_DIR/lua/demo/tasks/worktree_task.lua"
+
+printf '%s\n' \
+  '# Agent review notes' \
+  '' \
+  '- Check the new maximum calculation.' \
+  '- Keep this file untracked for the demo.' > "$SECONDARY_DIR/notes/agent-review.md"
+
+git -C "$SECONDARY_DIR" add lua/demo/tasks/worktree_task.lua
 
 printf '%s\n' \
   'local M = {}' \
@@ -191,6 +236,8 @@ git -C "$DEMO_DIR" add README.md lua/demo/format.lua "$PIPELINE_PATH" "$FORMATTE
 write_large_pipeline working
 
 printf 'Vigit demo repository: %s\n' "$DEMO_DIR"
+printf 'Secondary worktree: %s\n' "$SECONDARY_DIR"
+printf '%s\n' 'Try worktrees: press w, select WT demo-secondary, then press Enter.'
 printf '%s\n' 'Close Neovim to remove it.'
 
 cd "$DEMO_DIR"

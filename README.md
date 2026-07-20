@@ -2,9 +2,10 @@
 
 # Vigit
 
-**Review, navigate, edit, stage, and unstage Git changes without leaving Neovim.**
+**Review AI-agent changes across Git worktrees without leaving Neovim.**
 
-A keyboard-first Git workspace built entirely in Lua.
+A keyboard-first Git workspace for inspecting, correcting, and handing review
+comments back to coding agents.
 
 [Live site](https://vigit-neovim.gentostage.chatgpt.site) · [Quick demo](#quick-demo) · [Installation](#installation) · [Key mappings](#key-mappings)
 
@@ -23,6 +24,10 @@ A keyboard-first Git workspace built entirely in Lua.
   diff.
 - Preview a different file simply by moving through the changes panel in
   one-file mode.
+- Switch between task worktrees from a modal view with branch and change
+  counters.
+- Attach review comments to diff lines and hand them to Codex through a
+  worktree-local file instead of terminal automation.
 
 ## Status
 
@@ -39,9 +44,12 @@ cd vigit
 ./scripts/demo.sh
 ```
 
-The script creates a temporary Git repository with staged, unstaged, deleted,
-untracked, deeply nested, and long-file changes. It launches Vigit in a clean
-Neovim session and removes the fixture when Neovim exits.
+The script creates a temporary Git repository plus a linked `demo-secondary`
+worktree. Together they contain independent staged, unstaged, untracked,
+nested, deleted, and long-file changes. It launches Vigit in a clean Neovim
+session; press `w` to open the picker, where `ROOT` marks the primary checkout
+and `WT` marks linked worktrees. The complete fixture is removed when Neovim
+exits.
 
 Use your own Neovim configuration:
 
@@ -113,12 +121,44 @@ that must be saved or explicitly discarded.
 | `h` / `l` | Collapse or expand the directory under the cursor |
 | `a` | Return to the all-files diff |
 | `e` | Edit the selected file in a normal Neovim tab |
+| `w` | Open the worktree picker |
+| `[w` / `]w` | Move between open Vigit worktree tabs |
+| `c` | Add a review comment at the current file or diff line |
+| `C` | Open review issues for the current worktree |
 | `s` | Stage an unstaged file/hunk or unstage a staged file/hunk |
 | `r` | Refresh Git status and diff |
 | `f` | Toggle compact and expanded diff context |
 | `q` | Close the Vigit interface |
 | `Q` | Return from the edit tab to Vigit |
 | `:qa!` | Exit Neovim completely |
+
+## AI-agent review workflow
+
+Vigit keeps review data outside the working tree under the current worktree's
+Git metadata:
+
+```text
+<git-dir>/vigit/review.json
+<git-dir>/vigit/review.md
+```
+
+Add comments with `c`, inspect them with `C`, then install the bundled Codex
+skill once:
+
+```vim
+:VigitInstallCodexSkill
+```
+
+Run `$vigit-review` from Codex in the same worktree. The skill validates each
+comment against current code, applies focused fixes, uses project-defined
+Python verification commands, and updates issue statuses. It does not depend
+on tmux, stage changes, commit, push, or inspect another worktree.
+
+Use `:VigitWorktrees` or `w` to open the worktree modal. Selecting a worktree
+focuses its existing Vigit tab or opens a new tab with a tab-local working
+directory. Inside the modal, `d` removes a linked `WT` after typing `DELETE`;
+the primary `ROOT` cannot be removed, open Vigit worktrees must be closed
+first, and the Git branch is always kept.
 
 ## Plugin-friendly edit mode
 
@@ -156,4 +196,5 @@ demo recording.
 - Push, pull, and log views.
 - Side-by-side diff mode.
 - Configurable mappings and layout.
+- Rich multi-line review editor and automatic stale-comment re-anchoring.
 - Recorded demo and richer project gallery.

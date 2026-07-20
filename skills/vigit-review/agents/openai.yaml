@@ -1,0 +1,4 @@
+interface:
+  display_name: "Vigit Review"
+  short_description: "Resolve Vigit review comments safely"
+  default_prompt: "Use $vigit-review to resolve the open Vigit review comments in this worktree."

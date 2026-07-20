@@ -59,6 +59,13 @@ local function result_or_error(output, code)
   return output, nil
 end
 
+local function trim(value)
+  if vim and vim.trim then
+    return vim.trim(value or "")
+  end
+  return tostring(value or ""):gsub("^%s+", ""):gsub("%s+$", "")
+end
+
 function M.is_repo(cwd)
   local output, code = run("rev-parse --is-inside-work-tree", cwd)
   if code ~= 0 then
@@ -67,12 +74,148 @@ function M.is_repo(cwd)
   return output:match("true") ~= nil, nil
 end
 
+function M.root(cwd)
+  local output, err = result_or_error(run("rev-parse --show-toplevel", cwd))
+  if err then
+    return nil, err
+  end
+  return trim(output), nil
+end
+
+function M.git_dir(cwd)
+  local output, err = result_or_error(run("rev-parse --absolute-git-dir", cwd))
+  if err then
+    return nil, err
+  end
+  return trim(output), nil
+end
+
+function M.branch(cwd)
+  local output, err = result_or_error(run("branch --show-current", cwd))
+  if err then
+    return nil, err
+  end
+  local branch = trim(output)
+  if branch ~= "" then
+    return branch, nil
+  end
+  local head, head_err = result_or_error(run("rev-parse --short HEAD", cwd))
+  if head_err then
+    return nil, head_err
+  end
+  return "detached@" .. trim(head), nil
+end
+
+function M.worktree_list(cwd)
+  local output, err = result_or_error(run("worktree list --porcelain", cwd))
+  if err then
+    return nil, err
+  end
+
+  local entries = {}
+  local current = nil
+  for line in (output .. "\n"):gmatch("(.-)\n") do
+    if line == "" then
+      if current then
+        entries[#entries + 1] = current
+        current = nil
+      end
+    else
+      local key, value = line:match("^(%S+)%s?(.*)$")
+      if key == "worktree" then
+        if current then
+          entries[#entries + 1] = current
+        end
+        current = { path = value }
+      elseif current and key == "branch" then
+        current.branch = value:gsub("^refs/heads/", "")
+      elseif current and key == "HEAD" then
+        current.head = value
+      elseif current and (key == "bare" or key == "detached" or key == "locked" or key == "prunable") then
+        current[key] = value == "" and true or value
+      end
+    end
+  end
+  if current then
+    entries[#entries + 1] = current
+  end
+  return entries, nil
+end
+
+function M.remove_worktree(cwd, path, force)
+  local entries, list_err = M.worktree_list(cwd)
+  if not entries then
+    return false, list_err
+  end
+
+  local target = trim(path):gsub("/+$", "")
+  local primary = entries[1] and trim(entries[1].path):gsub("/+$", "") or ""
+  if target == primary then
+    return false, "The primary worktree cannot be removed"
+  end
+
+  local found = false
+  for _, entry in ipairs(entries) do
+    if trim(entry.path):gsub("/+$", "") == target then
+      found = true
+      break
+    end
+  end
+  if not found then
+    return false, "Worktree is no longer registered: " .. target
+  end
+
+  local command = "worktree remove "
+  if force then
+    command = command .. "--force "
+  end
+  local output, code = run(command .. shell_quote(target), cwd)
+  if code ~= 0 then
+    return false, trim(output)
+  end
+  return true, nil
+end
+
 function M.status(cwd)
   local output, err = result_or_error(run("status --porcelain=v1 --untracked-files=all", cwd))
   if err then
     return nil, err
   end
   return parser.parse_status(output), nil
+end
+
+function M.worktree_summary(cwd)
+  local status, err = M.status(cwd)
+  if err then
+    return nil, err
+  end
+
+  local paths = {}
+  local staged = 0
+  local unstaged = 0
+  local untracked = 0
+  for _, file in ipairs(status.staged or {}) do
+    staged = staged + 1
+    paths[file.path] = true
+  end
+  for _, file in ipairs(status.unstaged or {}) do
+    unstaged = unstaged + 1
+    if file.status == "?" then
+      untracked = untracked + 1
+    end
+    paths[file.path] = true
+  end
+
+  local changed = 0
+  for _ in pairs(paths) do
+    changed = changed + 1
+  end
+  return {
+    changed = changed,
+    staged = staged,
+    unstaged = unstaged,
+    untracked = untracked,
+  }, nil
 end
 
 local function untracked_diff(path, cwd, context)

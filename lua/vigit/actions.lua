@@ -148,6 +148,26 @@ function M.edit_file(session)
   require("vigit.ui").open_editor(session, file, target_line)
 end
 
+function M.open_worktrees(session)
+  require("vigit.worktree_picker").open(session)
+end
+
+function M.add_review_comment(session)
+  require("vigit.review_ui").add_comment(session)
+end
+
+function M.open_reviews(session)
+  require("vigit.review_ui").open(session)
+end
+
+function M.next_worktree()
+  require("vigit.ui").cycle_worktree(1)
+end
+
+function M.previous_worktree()
+  require("vigit.ui").cycle_worktree(-1)
+end
+
 M.open_file = M.select_file
 
 local function finish_index_change(session, ok, err)

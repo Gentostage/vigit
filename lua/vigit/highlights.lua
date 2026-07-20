@@ -328,9 +328,15 @@ function M.decorate(session)
     session.changes_win,
     "CHANGES · " .. string.upper(session.state.changes_mode),
     "VigitChangesNormal",
-    "[t] [↵] [e] [s] [r] [q]"
+    "[w worktrees] [c comment] [C reviews] [t] [↵] [e] [s] [r] [q]",
+    session.worktree_name .. " · " .. session.branch .. " · " .. tostring(session.review_count or 0) .. " review"
   )
-  decorate_window(session.diff_win, diff_title, "VigitDiffNormal", diff_hint, diff_detail)
+  local worktree_detail =
+    session.worktree_name .. " · " .. session.branch .. " · " .. tostring(session.review_count or 0) .. " review"
+  if diff_detail then
+    worktree_detail = worktree_detail .. " · " .. diff_detail
+  end
+  decorate_window(session.diff_win, diff_title, "VigitDiffNormal", diff_hint, worktree_detail)
   decorate_changes(session)
   decorate_diff_buffer(session.diff_buf, session.diff_win, session.state.diff_lines, session.state.diff_map)
 end
