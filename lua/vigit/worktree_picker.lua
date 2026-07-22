@@ -13,22 +13,55 @@ local function close(picker)
   end
 end
 
-local function truncate(value, width)
+local function display_width(value)
+  return vim.fn.strdisplaywidth(tostring(value or ""))
+end
+
+local function take_display(value, width, from_right)
+  if width <= 0 then
+    return ""
+  end
+  local count = vim.fn.strchars(value)
+  local parts = {}
+  local used = 0
+  local first = from_right and count - 1 or 0
+  local last = from_right and 0 or count - 1
+  local step = from_right and -1 or 1
+  for index = first, last, step do
+    local char = vim.fn.strcharpart(value, index, 1)
+    local char_width = display_width(char)
+    if used + char_width > width then
+      break
+    end
+    if from_right then
+      table.insert(parts, 1, char)
+    else
+      parts[#parts + 1] = char
+    end
+    used = used + char_width
+  end
+  return table.concat(parts)
+end
+
+local function display_truncate(value, width)
   value = tostring(value or "")
-  if #value <= width then
+  if display_width(value) <= width then
     return value
   end
-  if width <= 2 then
-    return value:sub(1, width)
+  if width <= 1 then
+    return take_display(value, width, false)
   end
   local left = math.ceil((width - 1) / 2)
   local right = math.floor((width - 1) / 2)
-  return value:sub(1, left) .. "…" .. value:sub(-right)
+  return take_display(value, left, false) .. "…" .. take_display(value, right, true)
 end
 
-local function entry_line(entry, width)
-  local marker = entry.current and "●" or " "
-  local kind = entry.primary and "ROOT" or "WT"
+local function display_pad(value, width)
+  local truncated = display_truncate(value, width)
+  return truncated .. string.rep(" ", math.max(width - display_width(truncated), 0))
+end
+
+local function status_text(entry)
   local stats = { entry.changed == 0 and "clean" or string.format("%d file%s", entry.changed, entry.changed == 1 and "" or "s") }
   if entry.staged > 0 then
     stats[#stats + 1] = "S:" .. entry.staged
@@ -42,9 +75,48 @@ local function entry_line(entry, width)
   if entry.open then
     stats[#stats + 1] = "OPEN"
   end
-  local fixed =
-    string.format("%s %-5s %-20s %-24s ", marker, kind, truncate(entry.name, 20), truncate(entry.branch, 24))
-  return fixed .. truncate(table.concat(stats, " · "), math.max(width - #fixed, 1))
+  return table.concat(stats, " · ")
+end
+
+local function table_layout(width, entries)
+  local gap_width = 2
+  local fixed_width = 1 + 4 + gap_width * 4
+  local available = math.max(width - fixed_width, 3)
+  local status_natural = display_width("STATUS")
+  for _, entry in ipairs(entries) do
+    status_natural = math.max(status_natural, display_width(status_text(entry)))
+  end
+  local status_width = math.min(status_natural, math.max(8, math.floor(available * 0.28)))
+  local flexible = math.max(available - status_width, 2)
+  local name_width = math.max(math.floor(flexible * 0.45), 1)
+  return {
+    marker = 1,
+    kind = 4,
+    name = name_width,
+    branch = math.max(flexible - name_width, 1),
+    status = status_width,
+    separator = string.rep(" ", gap_width),
+  }
+end
+
+local function table_line(layout, values)
+  return table.concat({
+    display_pad(values.marker, layout.marker),
+    display_pad(values.kind, layout.kind),
+    display_pad(values.name, layout.name),
+    display_pad(values.branch, layout.branch),
+    display_pad(values.status, layout.status),
+  }, layout.separator)
+end
+
+local function entry_line(entry, layout)
+  return table_line(layout, {
+    marker = entry.current and "●" or "",
+    kind = entry.primary and "ROOT" or "WT",
+    name = entry.name,
+    branch = entry.branch,
+    status = status_text(entry),
+  })
 end
 
 local function selected_entry(picker)
@@ -106,14 +178,21 @@ render = function(picker, selected_path)
     return false
   end
   picker.entries = entries
+  local layout = table_layout(picker.width, entries)
 
   local lines = {
     " WORKTREES",
-    "   TYPE  NAME                 BRANCH                   STATUS",
+    table_line(layout, {
+      marker = "",
+      kind = "TYPE",
+      name = "NAME",
+      branch = "BRANCH",
+      status = "STATUS",
+    }),
   }
   local selected_row = 3
   for index, entry in ipairs(entries) do
-    lines[#lines + 1] = entry_line(entry, picker.width)
+    lines[#lines + 1] = entry_line(entry, layout)
     if entry.path == selected_path then
       selected_row = index + 2
     end
@@ -133,22 +212,27 @@ render = function(picker, selected_path)
   vim.api.nvim_buf_add_highlight(picker.buf, picker.namespace, "Comment", #lines - 1, 0, -1)
   for index, entry in ipairs(entries) do
     local row = index + 1
+    local row_text = lines[index + 2]
     if entry.current then
-      vim.api.nvim_buf_add_highlight(picker.buf, picker.namespace, "DiagnosticInfo", row, 0, 1)
+      vim.api.nvim_buf_add_highlight(picker.buf, picker.namespace, "DiagnosticInfo", row, 0, #"●")
     end
     if entry.review_count > 0 then
       vim.api.nvim_buf_add_highlight(picker.buf, picker.namespace, "DiagnosticWarn", row, 0, -1)
     elseif entry.open then
       vim.api.nvim_buf_add_highlight(picker.buf, picker.namespace, "DiagnosticOk", row, 0, -1)
     end
-    vim.api.nvim_buf_add_highlight(
-      picker.buf,
-      picker.namespace,
-      entry.primary and "VigitPanelTitle" or "Comment",
-      row,
-      2,
-      entry.primary and 6 or 4
-    )
+    local kind = entry.primary and "ROOT" or "WT"
+    local kind_start = row_text:find(kind, 1, true)
+    if kind_start then
+      vim.api.nvim_buf_add_highlight(
+        picker.buf,
+        picker.namespace,
+        entry.primary and "VigitPanelTitle" or "Comment",
+        row,
+        kind_start - 1,
+        kind_start - 1 + #kind
+      )
+    end
   end
 
   local max_row = math.max(#entries + 2, 3)
@@ -159,7 +243,7 @@ end
 function M.open(session)
   local columns = math.max(vim.o.columns, 40)
   local screen_lines = math.max(vim.o.lines - vim.o.cmdheight, 10)
-  local width = math.max(36, math.min(100, columns - 4))
+  local width = math.max(36, math.min(140, math.floor(columns * 0.9), columns - 4))
   local height = math.max(6, math.min(20, screen_lines - 4))
   local buf = vim.api.nvim_create_buf(false, true)
   local namespace = vim.api.nvim_create_namespace("vigit-worktrees-" .. buf)

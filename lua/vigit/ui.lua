@@ -369,11 +369,12 @@ function M.open(opts)
   -- Built-in diff syntax paints whole added/removed lines and would cover the
   -- language-aware highlights added by Vigit.
   vim.bo[diff_buf].syntax = ""
-  vim.api.nvim_win_set_buf(0, changes_buf)
-  local changes_win = vim.api.nvim_get_current_win()
-  vim.cmd("vsplit")
+  vim.api.nvim_win_set_buf(0, diff_buf)
   local diff_win = vim.api.nvim_get_current_win()
-  vim.api.nvim_win_set_buf(diff_win, diff_buf)
+  vim.cmd("rightbelow vsplit")
+  local changes_win = vim.api.nvim_get_current_win()
+  vim.api.nvim_win_set_buf(changes_win, changes_buf)
+  vim.api.nvim_set_current_win(diff_win)
 
   local session = {
     state = state,

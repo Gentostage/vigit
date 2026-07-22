@@ -83,7 +83,7 @@ it("open creates windows, buffers, and renders state lines", function()
       end,
     }),
     cmd = function(command)
-      if command == "vsplit" then
+      if command == "rightbelow vsplit" then
         current_win = 101
       end
     end,
@@ -106,8 +106,11 @@ it("open creates windows, buffers, and renders state lines", function()
       nvim_get_current_win = function()
         return current_win
       end,
+      nvim_set_current_win = function(win)
+        current_win = win
+      end,
       nvim_win_set_width = function(win, width)
-        assert_equal(win, 100)
+        assert_equal(win, 101)
         assert_equal(width, 32)
       end,
     },
@@ -118,8 +121,8 @@ it("open creates windows, buffers, and renders state lines", function()
     assert_equal(session.state.cwd, "/tmp/repo")
     assert_equal(session.changes_buf, 1)
     assert_equal(session.diff_buf, 2)
-    assert_equal(session.changes_win, 100)
-    assert_equal(session.diff_win, 101)
+    assert_equal(session.changes_win, 101)
+    assert_equal(session.diff_win, 100)
     assert_equal(lines_by_buf[1][2], " M a.txt")
     assert_equal(lines_by_buf[2][2], "@@ a.txt")
     assert_equal(keymaps, 10)
@@ -170,7 +173,7 @@ it("open propagates actions module load errors", function()
       end,
     }),
     cmd = function(command)
-      if command == "vsplit" then
+      if command == "rightbelow vsplit" then
         current_win = 101
       end
     end,
@@ -185,6 +188,9 @@ it("open propagates actions module load errors", function()
       nvim_win_set_buf = function() end,
       nvim_get_current_win = function()
         return current_win
+      end,
+      nvim_set_current_win = function(win)
+        current_win = win
       end,
       nvim_win_set_width = function() end,
     },
