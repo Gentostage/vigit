@@ -41,12 +41,29 @@ function M.refresh(session)
 end
 
 function M.toggle_full_context(session)
+  local anchor = nil
+  if current_buffer_name(session) == "diff" then
+    local meta = session.state.diff_map[current_line()]
+    if meta and meta.file then
+      anchor = {
+        file = meta.file.path,
+        section = meta.file.section,
+        line = meta.target_line or meta.file.target_line or 1,
+      }
+    end
+  end
   local ok, err = session.state:toggle_full_context()
   if not ok then
     notify(err, vim.log.levels.ERROR)
     return
   end
   require("vigit.ui").render(session)
+  if anchor and session.diff_win and vim.api.nvim_win_is_valid(session.diff_win) then
+    local row = session.state:diff_line_for_anchor(anchor)
+    if row then
+      vim.api.nvim_win_set_cursor(session.diff_win, { row, 0 })
+    end
+  end
 end
 
 function M.select_file(session)
@@ -146,6 +163,58 @@ function M.edit_file(session)
     return
   end
   require("vigit.ui").open_editor(session, file, target_line)
+end
+
+local function supports_definition(client)
+  if type(client.supports_method) == "function" then
+    local ok, supported = pcall(client.supports_method, client, "textDocument/definition")
+    if ok then
+      return supported
+    end
+  end
+  return client.server_capabilities and client.server_capabilities.definitionProvider == true
+end
+
+local function request_definition(buf, win, attempt)
+  if not vim.api.nvim_buf_is_valid(buf) or not vim.api.nvim_win_is_valid(win) then
+    return
+  end
+  local clients = vim.lsp.get_clients({ bufnr = buf })
+  for _, client in ipairs(clients) do
+    if supports_definition(client) then
+      vim.api.nvim_win_call(win, function()
+        vim.lsp.buf.definition()
+      end)
+      return
+    end
+  end
+  if attempt < 20 then
+    vim.defer_fn(function()
+      request_definition(buf, win, attempt + 1)
+    end, 100)
+    return
+  end
+  notify("LSP definition is not available for this file", vim.log.levels.WARN)
+end
+
+function M.goto_definition(session)
+  if current_buffer_name(session) ~= "diff" then
+    notify("Go to definition is available from the diff", vim.log.levels.WARN)
+    return
+  end
+  local row = current_line()
+  local file, target_line = session.state:edit_target("diff", row)
+  if not file then
+    notify("No source line under cursor", vim.log.levels.WARN)
+    return
+  end
+  local source_column = math.max(vim.api.nvim_win_get_cursor(0)[2], 0)
+  require("vigit.ui").open_editor(session, file, target_line, {
+    column = source_column,
+    after_open = function(buf, win)
+      request_definition(buf, win, 1)
+    end,
+  })
 end
 
 function M.open_worktrees(session)

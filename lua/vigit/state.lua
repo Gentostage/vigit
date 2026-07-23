@@ -75,9 +75,14 @@ local function render_diff_section(state, title, files, file_index, total_files)
         end
         previous_hunk = hunk
       else
-        add_diff_line(state, line.text, {
+        local text = line.text
+        if line.kind == "added" or line.kind == "removed" or line.kind == "context" then
+          text = text:sub(2)
+        end
+        add_diff_line(state, text, {
           file = file,
           hunk = line.hunk,
+          change_kind = line.kind,
           target_line = line.target_line or file.target_line or 1,
         })
       end

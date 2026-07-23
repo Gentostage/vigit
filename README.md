@@ -19,7 +19,8 @@ comments back to coding agents.
 - Switch between a compact file list and a VS Code-style collapsed tree.
 - Review every changed file in one scrollable view or focus on a single file.
 - Stage or unstage a whole file or the hunk under the cursor.
-- Read Lua changes with syntax-aware highlighting and restrained diff colors.
+- Reuse installed TreeSitter parsers for syntax-aware diff highlighting, with
+  compact gutter change bars and a built-in Lua fallback for the isolated demo.
 - Open the real file in a normal, editable Neovim tab and return to a refreshed
   diff.
 - Preview a different file simply by moving through the changes panel in
@@ -124,6 +125,7 @@ that must be saved or explicitly discarded.
 | `h` / `l` | Collapse or expand the directory under the cursor |
 | `a` | Return to the all-files diff |
 | `e` | Edit the selected file in a normal Neovim tab |
+| `gd` | Open the real file at the cursor and request its LSP definition |
 | `w` | Open the worktree picker |
 | `[w` / `]w` | Move between open Vigit worktree tabs |
 | `c` | Add a comment, or edit the comment marked on the current diff line |
@@ -207,6 +209,20 @@ With `./scripts/demo.sh --plugins`, Telescope mappings are available:
 
 Every regular file buffer opened in the edit tab is attached to the Vigit
 workspace, so `Q` remains available after navigating to another file.
+
+Vigit automatically uses TreeSitter parsers already installed in Neovim. For
+example, install Python highlighting with:
+
+```vim
+:TSInstall python
+```
+
+Collapsed context lines also show their enclosing class and function when the
+active parser can identify them.
+
+`gd` uses Neovim's standard LSP client after opening the real source buffer.
+Vigit does not install a language server; the server configured for that
+filetype attaches exactly as it does during normal editing.
 
 ## Project site
 

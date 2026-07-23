@@ -1,6 +1,7 @@
 local M = {}
 
 local namespace = vim.api.nvim_create_namespace("vigit-highlights")
+local syntax = require("vigit.syntax")
 
 local lua_keywords = {
   ["and"] = true,
@@ -89,6 +90,8 @@ function M.setup()
   set_link("VigitFileAdded", "Added")
   set_link("VigitFileModified", "Changed")
   set_link("VigitFileDeleted", "Removed")
+  set_link("VigitDiffAddSign", "Added")
+  set_link("VigitDiffDeleteSign", "Removed")
   set_link("VigitFileHeader", "Function")
   set_link("VigitFileHeaderLine", "CursorLine")
   set_link("VigitFileBorder", "WinSeparator")
@@ -97,6 +100,7 @@ function M.setup()
   set_link("VigitCardUnstaged", "DiagnosticWarn")
   set_link("VigitHunkHeader", "Special")
   set_link("VigitGap", "Comment")
+  set_link("VigitGapContext", "Function")
   set_link("VigitEmpty", "Comment")
   set_link("VigitLuaKeyword", "Keyword")
   set_link("VigitLuaConstant", "Boolean")
@@ -116,6 +120,15 @@ local function add_line_highlight(buf, group, row)
   vim.api.nvim_buf_set_extmark(buf, namespace, row - 1, 0, {
     line_hl_group = group,
     priority = 10,
+  })
+end
+
+local function add_change_sign(buf, row, change_kind)
+  local group = change_kind == "added" and "VigitDiffAddSign" or "VigitDiffDeleteSign"
+  vim.api.nvim_buf_set_extmark(buf, namespace, row - 1, 0, {
+    sign_text = "▎",
+    sign_hl_group = group,
+    priority = 20,
   })
 end
 
@@ -217,9 +230,8 @@ local function add_token(buf, row, offset, start_col, end_col, group)
 end
 
 local function highlight_lua_line(buf, row, line)
-  local marker = line:sub(1, 1)
-  local offset = (marker == "+" or marker == "-" or marker == " ") and 1 or 0
-  local source = line:sub(offset + 1)
+  local offset = 0
+  local source = line
   local index = 1
 
   while index <= #source do
@@ -271,9 +283,28 @@ local function highlight_lua_line(buf, row, line)
   end
 end
 
-local function decorate_diff_buffer(buf, win, lines, diff_map)
+local function add_gap_context(buf, row, context)
+  vim.api.nvim_buf_set_extmark(buf, namespace, row - 1, 0, {
+    virt_text = { { " · " .. context, "VigitGapContext" } },
+    virt_text_pos = "eol",
+    hl_mode = "combine",
+    priority = 25,
+  })
+end
+
+local function decorate_diff_buffer(buf, win, lines, diff_map, root)
   vim.api.nvim_buf_clear_namespace(buf, namespace, 0, -1)
+  set_window_option(win, "signcolumn", "yes:1")
   local width = vim.api.nvim_win_is_valid(win) and vim.api.nvim_win_get_width(win) or 80
+  local ok, treesitter_rows = pcall(syntax.decorate, {
+    buf = buf,
+    root = root,
+    lines = lines,
+    diff_map = diff_map,
+    add_token = add_token,
+    add_gap_context = add_gap_context,
+  })
+  treesitter_rows = ok and treesitter_rows or {}
 
   for row, line in ipairs(lines) do
     local meta = diff_map and diff_map[row] or nil
@@ -300,15 +331,21 @@ local function decorate_diff_buffer(buf, win, lines, diff_map)
       add_card_border(buf, row, width, "╰")
     elseif meta and meta.kind == "gap" then
       add_highlight(buf, "VigitGap", row)
-    elseif line:sub(1, 1) == "+" then
+    elseif meta and meta.change_kind == "added" then
       add_line_highlight(buf, "VigitDiffAddLine", row)
-      add_highlight(buf, "VigitFileAdded", row, 0, 1)
-    elseif line:sub(1, 1) == "-" then
+      add_change_sign(buf, row, "added")
+    elseif meta and meta.change_kind == "removed" then
       add_line_highlight(buf, "VigitDiffDeleteLine", row)
-      add_highlight(buf, "VigitFileDeleted", row, 0, 1)
+      add_change_sign(buf, row, "removed")
     end
 
-    if meta and meta.file and not meta.kind and meta.file.path and meta.file.path:match("%.lua$") then
+    if meta
+      and meta.file
+      and not meta.kind
+      and meta.file.path
+      and meta.file.path:match("%.lua$")
+      and not treesitter_rows[row]
+    then
       highlight_lua_line(buf, row, line)
     end
   end
@@ -350,11 +387,11 @@ function M.decorate(session)
   local selected = session.state:selected_file()
   local diff_title = "DIFF · ALL FILES"
   local diff_detail = nil
-  local diff_hint = "↵ file · e file · c add/edit comment · C comments · P prompt · s index · q close"
+  local diff_hint = "↵ file · e edit · gd definition · c comment · C comments · P prompt · s index · q close"
   if selected then
     diff_title = "DIFF · ONE FILE"
     diff_detail = selected.path
-    diff_hint = "e file · a all · c add/edit comment · C comments · P prompt · s index · q close"
+    diff_hint = "e edit · gd definition · a all · c comment · C comments · P prompt · s index · q close"
   end
 
   decorate_window(
@@ -371,7 +408,7 @@ function M.decorate(session)
   end
   decorate_window(session.diff_win, diff_title, "VigitDiffNormal", diff_hint, worktree_detail)
   decorate_changes(session)
-  decorate_diff_buffer(session.diff_buf, session.diff_win, session.state.diff_lines, session.state.diff_map)
+  decorate_diff_buffer(session.diff_buf, session.diff_win, session.state.diff_lines, session.state.diff_map, session.root)
   decorate_comment_markers(session)
 end
 

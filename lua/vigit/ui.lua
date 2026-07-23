@@ -226,7 +226,8 @@ local function modified_editor_buffers(session, editor)
   return modified
 end
 
-local function finish_editor(session)
+local function finish_editor(session, opts)
+  opts = opts or {}
   local editor = session and session.editor or nil
   if not editor then
     return
@@ -234,7 +235,7 @@ local function finish_editor(session)
   session.editor = nil
   remove_editor_mappings(editor)
 
-  if active_session == session and valid_tab(session.vigit_tab) then
+  if (opts.focus or active_session == session) and valid_tab(session.vigit_tab) then
     vim.api.nvim_set_current_tabpage(session.vigit_tab)
   end
 
@@ -314,6 +315,7 @@ local function attach_keymaps(session)
   vim.keymap.set("x", "c", function()
     actions.add_review_comment(session, { visual = true })
   end, { buffer = session.diff_buf, silent = true, nowait = true })
+  map(session, session.diff_buf, "gd", actions.goto_definition)
   map(session, session.changes_buf, "t", actions.toggle_changes_view)
   map(session, session.changes_buf, "h", actions.collapse_directory)
   map(session, session.changes_buf, "l", actions.expand_directory)
@@ -561,11 +563,12 @@ function M.return_from_editor(session)
       return false
     end
   end
-  finish_editor(session)
+  finish_editor(session, { focus = true })
   return true
 end
 
-function M.open_editor(session, file, target_line)
+function M.open_editor(session, file, target_line, opts)
+  opts = opts or {}
   if session.editor and valid_tab(session.editor.tab) then
     vim.api.nvim_set_current_tabpage(session.editor.tab)
     notify("An edit tab is already open", vim.log.levels.INFO)
@@ -600,7 +603,9 @@ function M.open_editor(session, file, target_line)
   local win = vim.api.nvim_get_current_win()
   local line_count = math.max(vim.api.nvim_buf_line_count(buf), 1)
   local row = math.min(math.max(tonumber(target_line) or 1, 1), line_count)
-  vim.api.nvim_win_set_cursor(win, { row, 0 })
+  local line = vim.api.nvim_buf_get_lines(buf, row - 1, row, false)[1] or ""
+  local column = math.min(math.max(tonumber(opts.column) or 0, 0), #line)
+  vim.api.nvim_win_set_cursor(win, { row, column })
 
   session.editor = {
     tab = editor_tab,
@@ -616,6 +621,9 @@ function M.open_editor(session, file, target_line)
     end,
   })
   attach_editor_buffer(session, buf, win)
+  if opts.after_open then
+    opts.after_open(buf, win)
+  end
   return true
 end
 
