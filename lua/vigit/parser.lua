@@ -120,13 +120,17 @@ function M.parse_diff(output, section)
         parsed.kind = "meta"
         parsed.target_line = math.max((current_new_line or 1) - 1, 1)
       elseif parsed.kind == "added" then
-        parsed.target_line = math.max(current_new_line or 1, 1)
+        parsed.new_line = math.max(current_new_line or 1, 1)
+        parsed.target_line = parsed.new_line
         current_new_line = (current_new_line or 1) + 1
       elseif parsed.kind == "removed" then
+        parsed.old_line = math.max(current_old_line or 1, 1)
         parsed.target_line = math.max(current_new_line or 1, 1)
         current_old_line = (current_old_line or 1) + 1
       else
-        parsed.target_line = math.max(current_new_line or 1, 1)
+        parsed.old_line = math.max(current_old_line or 1, 1)
+        parsed.new_line = math.max(current_new_line or 1, 1)
+        parsed.target_line = parsed.new_line
         current_old_line = (current_old_line or 1) + 1
         current_new_line = (current_new_line or 1) + 1
       end

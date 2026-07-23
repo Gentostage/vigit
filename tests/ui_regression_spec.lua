@@ -62,6 +62,13 @@ changed[90] = "        selected_target = items[0] + 1"
 vim.fn.writefile(changed, repo_a .. "/sample.py")
 vim.fn.writefile({ "value = 2" }, repo_b .. "/sample.py")
 
+local treesitter_plugin = nil
+local treesitter_was_loaded = false
+pcall(function()
+  treesitter_plugin = require("lazy.core.config").plugins["nvim-treesitter"]
+  treesitter_was_loaded = treesitter_plugin and treesitter_plugin._.loaded ~= nil or false
+end)
+
 local ui = require("vigit.ui")
 local actions = require("vigit.actions")
 local session_a = assert(ui.open({ cwd = repo_a }))
@@ -76,6 +83,12 @@ local function syntax_test(name, callback)
     return
   end
   test(name, callback)
+end
+
+if treesitter_plugin and not treesitter_was_loaded then
+  test("first diff render loads installed nvim-treesitter", function()
+    assert(treesitter_plugin._.loaded ~= nil, "nvim-treesitter stayed lazy")
+  end)
 end
 
 syntax_test("Python keywords receive TreeSitter highlights in the diff", function()
@@ -102,6 +115,29 @@ syntax_test("Python keywords receive TreeSitter highlights in the diff", functio
   end
   assert(highlighted, "TreeSitter Python keyword highlight is missing")
   assert(syntax_mark_count < 64, "TreeSitter range metadata created excessive highlights")
+end)
+
+syntax_test("removed Python keywords receive TreeSitter highlights", function()
+  local row = assert(find_diff_row(session_a, function(line, meta)
+    return line:match("^%s+def execute") ~= nil
+      and meta
+      and meta.change_kind == "removed"
+  end), "removed Python function was not rendered")
+  local marks = vim.api.nvim_buf_get_extmarks(
+    session_a.diff_buf,
+    -1,
+    { row - 1, 0 },
+    { row - 1, -1 },
+    { details = true }
+  )
+  local highlighted = false
+  for _, mark in ipairs(marks) do
+    if mark[4] and mark[4].hl_group == "@keyword.function.python" then
+      highlighted = true
+      break
+    end
+  end
+  assert(highlighted, "removed Python keyword highlight is missing")
 end)
 
 test("changed lines use gutter bars instead of textual diff markers", function()

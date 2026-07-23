@@ -72,6 +72,23 @@ it("returns a focused diff for one file", function()
   assert_equal(files[1].section, "unstaged")
 end)
 
+it("returns HEAD, index, and worktree snapshots for diff sides", function()
+  local dir = temp_repo()
+  run("printf 'head\n' > sample.py", dir)
+  run("git add sample.py", dir)
+  run("git commit -q -m initial", dir)
+  run("printf 'index\n' > sample.py", dir)
+  run("git add sample.py", dir)
+  run("printf 'worktree\n' > sample.py", dir)
+
+  local staged = { section = "staged", path = "sample.py" }
+  local unstaged = { section = "unstaged", path = "sample.py" }
+  assert_equal(git.snapshot(staged, "old", dir), "head\n")
+  assert_equal(git.snapshot(staged, "new", dir), "index\n")
+  assert_equal(git.snapshot(unstaged, "old", dir), "index\n")
+  assert_equal(git.snapshot(unstaged, "new", dir), "worktree\n")
+end)
+
 it("stages a valid unstaged hunk", function()
   local dir = temp_repo()
   run("printf 'one\n' > a.txt", dir)

@@ -52,6 +52,15 @@ it("parses unified diff into files and hunks", function()
   assert_equal(files[1].hunks[1].old_count, 2)
   assert_equal(files[1].hunks[1].new_start, 1)
   assert_equal(files[1].hunks[1].new_count, 2)
-  assert_equal(files[1].hunks[1].lines[2].kind, "removed")
-  assert_equal(files[1].hunks[1].lines[3].kind, "added")
+  local context = files[1].hunks[1].lines[1]
+  local removed = files[1].hunks[1].lines[2]
+  local added = files[1].hunks[1].lines[3]
+  assert_equal(removed.kind, "removed")
+  assert_equal(added.kind, "added")
+  assert_equal(context.old_line, 1)
+  assert_equal(context.new_line, 1)
+  assert_equal(removed.old_line, 2)
+  assert_equal(removed.new_line, nil)
+  assert_equal(added.old_line, nil)
+  assert_equal(added.new_line, 2)
 end)

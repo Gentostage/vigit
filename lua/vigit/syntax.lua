@@ -1,35 +1,29 @@
 local M = {}
 
+local git = require("vigit.git")
+
 local MAX_FILE_BYTES = 1024 * 1024
 local cache = {}
+local provider_prepared = false
 
 local function absolute_path(root, path)
   return vim.fn.fnamemodify(vim.fs.joinpath(root, path), ":p")
 end
 
-local function signature(stat)
-  local mtime = stat.mtime or {}
-  return table.concat({
-    tostring(stat.size or 0),
-    tostring(mtime.sec or 0),
-    tostring(mtime.nsec or 0),
-  }, ":")
-end
-
-local function read_source(path, stat)
-  if not stat or stat.type ~= "file" or (stat.size or 0) > MAX_FILE_BYTES then
-    return nil
+local function prepare_provider()
+  if provider_prepared then
+    return
   end
-  local handle = io.open(path, "rb")
-  if not handle then
-    return nil
+  provider_prepared = true
+  local config_ok, config = pcall(require, "lazy.core.config")
+  local plugin = config_ok and config.plugins["nvim-treesitter"] or nil
+  if not plugin or (plugin._ and plugin._.loaded) then
+    return
   end
-  local source = handle:read("*a")
-  handle:close()
-  if source:find("\0", 1, true) then
-    return nil
+  local lazy_ok, lazy = pcall(require, "lazy")
+  if lazy_ok then
+    pcall(lazy.load, { plugins = { "nvim-treesitter" } })
   end
-  return source
 end
 
 local function language_for(path)
@@ -142,23 +136,29 @@ local function context_at(data, target_line)
   return #symbols > 0 and table.concat(symbols, ".") or nil
 end
 
-local function load_file(root, path)
-  local absolute = absolute_path(root, path)
-  local stat = vim.uv.fs_stat(absolute)
-  if not stat then
-    cache[absolute] = nil
+local function load_snapshot(root, file, side)
+  local source = git.snapshot(file, side, root)
+  if type(source) ~= "string"
+    or #source > MAX_FILE_BYTES
+    or source:find("\0", 1, true)
+  then
     return nil
   end
-  local current_signature = signature(stat)
-  local cached = cache[absolute]
+
+  local path = side == "old" and (file.old_path or file.path) or file.path
+  if not path then
+    return nil
+  end
+  local absolute = absolute_path(root, path)
+  local key = table.concat({ tostring(file.section), side, absolute }, ":")
+  local current_signature = vim.fn.sha256(source)
+  local cached = cache[key]
   if cached and cached.signature == current_signature then
     return cached.data
   end
 
-  local source = read_source(absolute, stat)
-  local language = source and language_for(absolute) or nil
-  if not source or not language then
-    cache[absolute] = { signature = current_signature, data = nil }
+  local language = language_for(absolute)
+  if not language then
     return nil
   end
   local ok, tree, query = pcall(function()
@@ -181,11 +181,12 @@ local function load_file(root, path)
   data.context_at = function(target_line)
     return context_at(data, target_line)
   end
-  cache[absolute] = { signature = current_signature, data = data }
+  cache[key] = { signature = current_signature, data = data }
   return data
 end
 
 function M.decorate(opts)
+  prepare_provider()
   local handled_rows = {}
   local files = {}
   for row, line in ipairs(opts.lines or {}) do
@@ -194,19 +195,26 @@ function M.decorate(opts)
     if file and file.path then
       local key = tostring(file.section) .. ":" .. file.path
       if files[key] == nil then
-        files[key] = load_file(opts.root, file.path) or false
+        files[key] = {
+          old = load_snapshot(opts.root, file, "old") or false,
+          new = load_snapshot(opts.root, file, "new") or false,
+        }
       end
-      local data = files[key] or nil
-      if data and meta.kind == "gap" then
-        local context = data.context_at(meta.target_line)
+      local snapshots = files[key]
+      local new_data = snapshots.new or nil
+      if new_data and meta.kind == "gap" then
+        local context = new_data.context_at(meta.target_line)
         if context and opts.add_gap_context then
           opts.add_gap_context(opts.buf, row, context)
         end
-      elseif data and not meta.kind then
-        local target_line = tonumber(meta.target_line)
-        if target_line and data.lines[target_line] == line then
+      elseif not meta.kind then
+        local side = meta.change_kind == "removed" and "old" or "new"
+        local data = snapshots[side] or nil
+        local source_line = side == "old" and meta.old_line or meta.new_line
+        source_line = tonumber(source_line)
+        if data and source_line and data.lines[source_line] == line then
           handled_rows[row] = true
-          for _, capture in ipairs(data.captures[target_line] or {}) do
+          for _, capture in ipairs(data.captures[source_line] or {}) do
             opts.add_token(
               opts.buf,
               row,

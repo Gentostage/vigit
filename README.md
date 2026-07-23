@@ -217,6 +217,11 @@ example, install Python highlighting with:
 :TSInstall python
 ```
 
+Both sides of a diff are highlighted from their real Git snapshots: `HEAD`,
+the index, and the worktree. With lazy.nvim, an installed `nvim-treesitter`
+plugin is loaded before the first diff render; other plugin managers continue
+to use their normal runtime setup.
+
 Collapsed context lines also show their enclosing class and function when the
 active parser can identify them.
 

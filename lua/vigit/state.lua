@@ -83,6 +83,8 @@ local function render_diff_section(state, title, files, file_index, total_files)
           file = file,
           hunk = line.hunk,
           change_kind = line.kind,
+          old_line = line.old_line,
+          new_line = line.new_line,
           target_line = line.target_line or file.target_line or 1,
         })
       end

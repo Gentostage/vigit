@@ -300,6 +300,38 @@ function M.diff_file(file, cwd, context)
   return parser.parse_diff(output, file.section), nil
 end
 
+local function read_worktree(path, cwd)
+  local base = tostring(cwd or ""):gsub("/+$", "")
+  local full_path = base ~= "" and (base .. "/" .. path) or path
+  local handle = io.open(full_path, "rb")
+  if not handle then
+    return nil, "Worktree file is unavailable: " .. path
+  end
+  local content = handle:read("*a")
+  handle:close()
+  return content, nil
+end
+
+function M.snapshot(file, side, cwd)
+  if not file or (side ~= "old" and side ~= "new") then
+    return nil, "Invalid snapshot request"
+  end
+  local path = side == "old" and (file.old_path or file.path) or file.path
+  if not path then
+    return nil, "Snapshot path is unavailable"
+  end
+  if file.section == "unstaged" and side == "new" then
+    return read_worktree(path, cwd)
+  end
+  local ref
+  if file.section == "staged" and side == "old" then
+    ref = "HEAD:" .. path
+  else
+    ref = ":" .. path
+  end
+  return result_or_error(run("show " .. shell_quote(ref), cwd))
+end
+
 function M.stage_file(path, cwd)
   local _, err = result_or_error(run("add -- " .. shell_quote(path), cwd))
   return err == nil, err

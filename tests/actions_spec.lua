@@ -49,13 +49,13 @@ it("refresh refreshes state and renders the session", function()
   reset_actions()
 end)
 
-it("opens file under cursor from the current buffer", function()
+it("selects file under cursor from the current buffer", function()
   reset_actions()
-  local opened_file = nil
+  local focused_file = nil
+  local rendered = false
   package.loaded["vigit.ui"] = {
-    open_file_window = function(_, file)
-      opened_file = file
-    end,
+    render = function() rendered = true end,
+    focus_file = function(_, file) focused_file = file end,
   }
 
   with_fake_vim({
@@ -72,15 +72,26 @@ it("opens file under cursor from the current buffer", function()
       changes_buf = 7,
       diff_buf = 8,
       state = {
+        changes_node_at_line = function()
+          return nil
+        end,
         file_at_line = function(_, buffer_name, line)
           assert_equal(buffer_name, "changes")
           assert_equal(line, 3)
           return file
         end,
+        select_file = function(_, actual)
+          assert_equal(actual, file)
+          return true, nil
+        end,
+        selected_file = function()
+          return file
+        end,
       },
     })
 
-    assert_equal(opened_file, file)
+    assert_equal(rendered, true)
+    assert_equal(focused_file, file)
   end)
 
   reset_actions()

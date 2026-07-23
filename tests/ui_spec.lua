@@ -8,9 +8,115 @@ local function with_fake_vim(vim_api, fn)
   end
 end
 
+local function reset_ui_modules()
+  package.loaded["vigit.ui"] = nil
+  package.loaded["vigit.state"] = nil
+  package.loaded["vigit.highlights"] = nil
+  package.loaded["vigit.git"] = nil
+  package.loaded["vigit.review"] = nil
+  package.loaded["vigit.actions"] = nil
+end
+
+local function stub_ui_modules(state_module)
+  reset_ui_modules()
+  package.loaded["vigit.state"] = state_module
+  package.loaded["vigit.highlights"] = {
+    setup = function() end,
+    decorate = function() end,
+  }
+  package.loaded["vigit.git"] = {
+    root = function(path)
+      return path, nil
+    end,
+  }
+  package.loaded["vigit.review"] = {
+    comments = function()
+      return {}, nil
+    end,
+  }
+end
+
+local function open_vim_fixture()
+  local fixture = {
+    next_buf = 0,
+    current_win = 100,
+    lines_by_buf = {},
+    keymaps = 0,
+    width = nil,
+  }
+  local buffer_options = setmetatable({}, {
+    __index = function(table, key)
+      local value = {}
+      rawset(table, key, value)
+      return value
+    end,
+  })
+
+  fixture.vim = {
+    o = { columns = 120 },
+    log = { levels = { ERROR = 4, INFO = 2, WARN = 3 } },
+    fn = {
+      getcwd = function() return "/unused" end,
+      fnamemodify = function(path) return path end,
+      fnameescape = function(path) return path end,
+    },
+    notify = function() end,
+    schedule = function() end,
+    bo = buffer_options,
+    cmd = function(command)
+      if command == "rightbelow vsplit" then
+        fixture.current_win = 101
+      end
+    end,
+    keymap = {
+      set = function(_, _, rhs)
+        assert_equal(type(rhs), "function")
+        fixture.keymaps = fixture.keymaps + 1
+      end,
+    },
+    api = {
+      nvim_create_buf = function()
+        fixture.next_buf = fixture.next_buf + 1
+        return fixture.next_buf
+      end,
+      nvim_buf_set_lines = function(buf, _, _, _, lines)
+        fixture.lines_by_buf[buf] = lines
+      end,
+      nvim_buf_set_name = function() end,
+      nvim_win_set_buf = function() end,
+      nvim_get_current_win = function()
+        return fixture.current_win
+      end,
+      nvim_set_current_win = function(win)
+        fixture.current_win = win
+      end,
+      nvim_win_is_valid = function(win)
+        return win == 100 or win == 101
+      end,
+      nvim_win_set_width = function(win, width)
+        assert_equal(win, 101)
+        fixture.width = width
+      end,
+      nvim_set_option_value = function() end,
+      nvim_get_current_tabpage = function()
+        return 10
+      end,
+      nvim_tabpage_is_valid = function(tab)
+        return tab == 10
+      end,
+      nvim_create_augroup = function()
+        return 7
+      end,
+      nvim_create_autocmd = function()
+        return 1
+      end,
+    },
+  }
+  return fixture
+end
+
 it("setup registers Vigit command that opens the UI", function()
-  local command_name = nil
-  local command_callback = nil
+  local commands = {}
   local opened = false
 
   package.loaded["vigit"] = nil
@@ -21,16 +127,18 @@ it("setup registers Vigit command that opens the UI", function()
   with_fake_vim({
     api = {
       nvim_create_user_command = function(name, callback)
-        command_name = name
-        command_callback = callback
+        commands[name] = callback
       end,
     },
   }, function()
     local vigit = require("vigit")
     vigit.setup()
-    assert_equal(command_name, "Vigit")
-    assert_truthy(command_callback)
-    command_callback()
+    assert_truthy(commands.Vigit)
+    assert_truthy(commands.VigitWorktrees)
+    assert_truthy(commands.VigitComments)
+    assert_truthy(commands.VigitReviews)
+    assert_truthy(commands.VigitInstallCodexSkill)
+    commands.Vigit()
     assert_equal(opened, true)
   end)
 
@@ -39,13 +147,7 @@ it("setup registers Vigit command that opens the UI", function()
 end)
 
 it("open creates windows, buffers, and renders state lines", function()
-  local next_buf = 0
-  local current_win = 100
-  local lines_by_buf = {}
-  local keymaps = 0
-
-  package.loaded["vigit.ui"] = nil
-  package.loaded["vigit.state"] = {
+  stub_ui_modules({
     new = function(opts)
       return {
         cwd = opts.cwd,
@@ -56,13 +158,17 @@ it("open creates windows, buffers, and renders state lines", function()
             assert_equal(cwd, "/tmp/repo")
             return true, nil
           end,
+          branch = function(cwd)
+            assert_equal(cwd, "/tmp/repo")
+            return "main"
+          end,
         },
         refresh = function()
           return true, nil
         end,
       }
     end,
-  }
+  })
   package.loaded["vigit.actions"] = {
     close = function() end,
     refresh = function() end,
@@ -71,50 +177,8 @@ it("open creates windows, buffers, and renders state lines", function()
     open_file = function() end,
   }
 
-  with_fake_vim({
-    log = { levels = { ERROR = 4, INFO = 2 } },
-    fn = { getcwd = function() return "/unused" end },
-    notify = function() end,
-    bo = setmetatable({}, {
-      __index = function(table, key)
-        local value = {}
-        rawset(table, key, value)
-        return value
-      end,
-    }),
-    cmd = function(command)
-      if command == "rightbelow vsplit" then
-        current_win = 101
-      end
-    end,
-    keymap = {
-      set = function(_, _, rhs)
-        assert_equal(type(rhs), "function")
-        keymaps = keymaps + 1
-      end,
-    },
-    api = {
-      nvim_create_buf = function()
-        next_buf = next_buf + 1
-        return next_buf
-      end,
-      nvim_buf_set_lines = function(buf, _, _, _, lines)
-        lines_by_buf[buf] = lines
-      end,
-      nvim_buf_set_name = function() end,
-      nvim_win_set_buf = function() end,
-      nvim_get_current_win = function()
-        return current_win
-      end,
-      nvim_set_current_win = function(win)
-        current_win = win
-      end,
-      nvim_win_set_width = function(win, width)
-        assert_equal(win, 101)
-        assert_equal(width, 32)
-      end,
-    },
-  }, function()
+  local fixture = open_vim_fixture()
+  with_fake_vim(fixture.vim, function()
     local ui = require("vigit.ui")
     local session, err = ui.open({ cwd = "/tmp/repo" })
     assert_equal(err, nil)
@@ -123,27 +187,19 @@ it("open creates windows, buffers, and renders state lines", function()
     assert_equal(session.diff_buf, 2)
     assert_equal(session.changes_win, 101)
     assert_equal(session.diff_win, 100)
-    assert_equal(lines_by_buf[1][2], " M a.txt")
-    assert_equal(lines_by_buf[2][2], "@@ a.txt")
-    assert_equal(keymaps, 10)
+    assert_equal(session.branch, "main")
+    assert_equal(fixture.lines_by_buf[1][2], " M a.txt")
+    assert_equal(fixture.lines_by_buf[2][2], "@@ a.txt")
+    assert_equal(fixture.width, 33)
+    assert_equal(fixture.keymaps, 31)
   end)
 
-  package.loaded["vigit.ui"] = nil
-  package.loaded["vigit.state"] = nil
-  package.loaded["vigit.actions"] = nil
+  reset_ui_modules()
 end)
 
 it("open propagates actions module load errors", function()
-  local next_buf = 0
-  local current_win = 100
-
-  package.loaded["vigit.ui"] = nil
   local old_preload = package.preload["vigit.actions"]
-  package.loaded["vigit.actions"] = nil
-  package.preload["vigit.actions"] = function()
-    error("actions load failed")
-  end
-  package.loaded["vigit.state"] = {
+  stub_ui_modules({
     new = function(opts)
       return {
         cwd = opts.cwd,
@@ -153,48 +209,23 @@ it("open propagates actions module load errors", function()
           is_repo = function()
             return true, nil
           end,
+          branch = function()
+            return "main"
+          end,
         },
         refresh = function()
           return true, nil
         end,
       }
     end,
-  }
+  })
+  package.loaded["vigit.actions"] = nil
+  package.preload["vigit.actions"] = function()
+    error("actions load failed")
+  end
 
-  with_fake_vim({
-    log = { levels = { ERROR = 4, INFO = 2 } },
-    fn = { getcwd = function() return "/tmp/repo" end },
-    notify = function() end,
-    bo = setmetatable({}, {
-      __index = function(table, key)
-        local value = {}
-        rawset(table, key, value)
-        return value
-      end,
-    }),
-    cmd = function(command)
-      if command == "rightbelow vsplit" then
-        current_win = 101
-      end
-    end,
-    keymap = { set = function() end },
-    api = {
-      nvim_create_buf = function()
-        next_buf = next_buf + 1
-        return next_buf
-      end,
-      nvim_buf_set_lines = function() end,
-      nvim_buf_set_name = function() end,
-      nvim_win_set_buf = function() end,
-      nvim_get_current_win = function()
-        return current_win
-      end,
-      nvim_set_current_win = function(win)
-        current_win = win
-      end,
-      nvim_win_set_width = function() end,
-    },
-  }, function()
+  local fixture = open_vim_fixture()
+  with_fake_vim(fixture.vim, function()
     local ui = require("vigit.ui")
     local ok, err = pcall(function()
       ui.open({ cwd = "/tmp/repo" })
@@ -203,141 +234,90 @@ it("open propagates actions module load errors", function()
     assert_truthy(tostring(err):match("actions load failed"))
   end)
 
-  package.loaded["vigit.ui"] = nil
-  package.loaded["vigit.state"] = nil
+  reset_ui_modules()
   package.preload["vigit.actions"] = old_preload
 end)
 
-it("opens a focused file diff window", function()
-  local next_buf = 0
-  local current_win = 100
-  local lines_by_buf = {}
-
-  package.loaded["vigit.ui"] = nil
-  package.loaded["vigit.state"] = { new = function() end }
+it("focuses a selected file in the existing diff window", function()
+  stub_ui_modules({ new = function() end })
+  local focused_win = nil
+  local focused_cursor = nil
+  local centered = false
 
   with_fake_vim({
-    log = { levels = { ERROR = 4, INFO = 2, WARN = 3 } },
+    log = { levels = { WARN = 3 } },
     notify = function() end,
-    bo = setmetatable({}, {
-      __index = function(table, key)
-        local value = {}
-        rawset(table, key, value)
-        return value
-      end,
-    }),
     cmd = function(command)
-      assert_equal(command, "botright split")
-      current_win = 101
+      assert_equal(command, "normal! zz")
+      centered = true
     end,
     api = {
-      nvim_create_buf = function()
-        next_buf = next_buf + 1
-        return next_buf
+      nvim_set_current_win = function(win)
+        focused_win = win
       end,
-      nvim_buf_set_lines = function(buf, _, _, _, lines)
-        lines_by_buf[buf] = lines
+      nvim_win_set_cursor = function(win, cursor)
+        assert_equal(win, 22)
+        focused_cursor = cursor
       end,
-      nvim_buf_set_name = function() end,
-      nvim_get_current_win = function()
-        return current_win
-      end,
-      nvim_win_set_buf = function(win, buf)
-        assert_equal(win, 101)
-        assert_equal(buf, 1)
+      nvim_win_call = function(win, callback)
+        assert_equal(win, 22)
+        callback()
       end,
     },
   }, function()
     local ui = require("vigit.ui")
-    local session = {
+    local file = { path = "a.txt", section = "unstaged" }
+    local focused = ui.focus_file({
+      diff_win = 22,
       state = {
-        cwd = "/tmp/repo",
-        full_context = true,
-        git = {
-          diff_file = function(file, cwd, context)
-            assert_equal(file.path, "a.txt")
-            assert_equal(cwd, "/tmp/repo")
-            assert_equal(context, 9999)
-            return { { lines = { { text = "@@ -1 +1 @@" }, { text = "+one" } } } }, nil
-          end,
-        },
+        diff_line_for_file = function(_, actual)
+          assert_equal(actual, file)
+          return 14
+        end,
       },
-    }
+    }, file)
 
-    ui.open_file_window(session, { path = "a.txt", section = "unstaged" })
-
-    assert_equal(session.file_win, 101)
-    assert_equal(lines_by_buf[1][1], "@@ a.txt")
-    assert_equal(lines_by_buf[1][2], "@@ -1 +1 @@")
-    assert_equal(lines_by_buf[1][3], "+one")
+    assert_equal(focused, true)
+    assert_equal(focused_win, 22)
+    assert_equal(focused_cursor[1], 14)
+    assert_equal(focused_cursor[2], 0)
+    assert_equal(centered, true)
   end)
 
-  package.loaded["vigit.ui"] = nil
-  package.loaded["vigit.state"] = nil
+  reset_ui_modules()
 end)
 
-it("reuses an existing focused file diff window", function()
-  local next_buf = 0
-  local current_win = 100
-  local split_count = 0
-  local buffers_by_win = {}
-
-  package.loaded["vigit.ui"] = nil
-  package.loaded["vigit.state"] = { new = function() end }
+it("focuses the first file header when returning to the overview", function()
+  stub_ui_modules({ new = function() end })
+  local focused_cursor = nil
 
   with_fake_vim({
-    log = { levels = { ERROR = 4, INFO = 2, WARN = 3 } },
-    notify = function() end,
-    bo = setmetatable({}, {
-      __index = function(table, key)
-        local value = {}
-        rawset(table, key, value)
-        return value
-      end,
-    }),
-    cmd = function(command)
-      assert_equal(command, "botright split")
-      split_count = split_count + 1
-      current_win = 101
-    end,
     api = {
-      nvim_create_buf = function()
-        next_buf = next_buf + 1
-        return next_buf
-      end,
-      nvim_buf_set_lines = function() end,
-      nvim_buf_set_name = function() end,
-      nvim_get_current_win = function()
-        return current_win
-      end,
-      nvim_win_set_buf = function(win, buf)
-        buffers_by_win[win] = buf
-      end,
       nvim_win_is_valid = function(win)
-        return win == 101
+        return win == 22
+      end,
+      nvim_set_current_win = function() end,
+      nvim_win_set_cursor = function(win, cursor)
+        assert_equal(win, 22)
+        focused_cursor = cursor
       end,
     },
   }, function()
     local ui = require("vigit.ui")
-    local session = {
+    local focused = ui.focus_overview({
+      diff_win = 22,
       state = {
-        cwd = "/tmp/repo",
-        git = {
-          diff_file = function(file)
-            return { { lines = { { text = "@@ -1 +1 @@" }, { text = "+" .. file.path } } } }, nil
-          end,
+        diff_lines = { "Unstaged", "  No changes", "Staged", "  1/1 [M] README.md" },
+        diff_map = {
+          [4] = { kind = "file_header" },
         },
       },
-    }
+    })
 
-    ui.open_file_window(session, { path = "a.txt", section = "unstaged" })
-    ui.open_file_window(session, { path = "b.txt", section = "unstaged" })
-
-    assert_equal(split_count, 1)
-    assert_equal(session.file_win, 101)
-    assert_equal(buffers_by_win[101], 2)
+    assert_equal(focused, true)
+    assert_equal(focused_cursor[1], 4)
+    assert_equal(focused_cursor[2], 0)
   end)
 
-  package.loaded["vigit.ui"] = nil
-  package.loaded["vigit.state"] = nil
+  reset_ui_modules()
 end)
