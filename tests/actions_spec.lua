@@ -201,11 +201,12 @@ it("discards an unstaged hunk after confirmation", function()
       nvim_get_current_buf = function() return 9 end,
       nvim_win_get_cursor = function() return { 4, 0 } end,
     },
-    ui = {
-      select = function(choices, opts, callback)
-        assert_equal(choices[2], "Discard hunk")
-        assert_truthy(opts.prompt:match("a%.txt"))
-        callback("Discard hunk")
+    fn = {
+      confirm = function(prompt, choices, default)
+        assert_truthy(prompt:match("a%.txt"))
+        assert_equal(choices, "&Yes\n&No")
+        assert_equal(default, 2)
+        return 1
       end,
     },
     log = { levels = { ERROR = 4, INFO = 2, WARN = 3 } },
@@ -256,8 +257,8 @@ it("requires staged hunks to be unstaged before discarding", function()
       nvim_get_current_buf = function() return 9 end,
       nvim_win_get_cursor = function() return { 4, 0 } end,
     },
-    ui = {
-      select = function()
+    fn = {
+      confirm = function()
         prompted = true
       end,
     },
@@ -297,8 +298,8 @@ it("does not discard an implicit hunk from a collapsed gap", function()
       nvim_get_current_buf = function() return 9 end,
       nvim_win_get_cursor = function() return { 4, 0 } end,
     },
-    ui = {
-      select = function()
+    fn = {
+      confirm = function()
         prompted = true
       end,
     },
@@ -345,11 +346,12 @@ it("restores a whole file to HEAD after confirmation", function()
       nvim_get_current_buf = function() return 5 end,
       nvim_win_get_cursor = function() return { 2, 0 } end,
     },
-    ui = {
-      select = function(choices, opts, callback)
-        assert_equal(choices[2], "Restore file")
-        assert_truthy(opts.prompt:match("a%.txt"))
-        callback("Restore file")
+    fn = {
+      confirm = function(prompt, choices, default)
+        assert_truthy(prompt:match("a%.txt"))
+        assert_equal(choices, "&Yes\n&No")
+        assert_equal(default, 2)
+        return 1
       end,
     },
     log = { levels = { ERROR = 4, INFO = 2, WARN = 3 } },
@@ -399,12 +401,13 @@ it("describes restoring an untracked file as deletion", function()
       nvim_get_current_buf = function() return 5 end,
       nvim_win_get_cursor = function() return { 2, 0 } end,
     },
-    ui = {
-      select = function(choices, opts, callback)
-        assert_equal(choices[2], "Delete file")
-        assert_truthy(opts.prompt:match("Delete untracked file"))
-        assert_truthy(opts.prompt:match("scratch%.md"))
-        callback("Delete file")
+    fn = {
+      confirm = function(prompt, choices, default)
+        assert_truthy(prompt:match("Delete untracked file"))
+        assert_truthy(prompt:match("scratch%.md"))
+        assert_equal(choices, "&Yes\n&No")
+        assert_equal(default, 2)
+        return 1
       end,
     },
     log = { levels = { ERROR = 4, INFO = 2, WARN = 3 } },

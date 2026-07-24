@@ -29,6 +29,8 @@ local files = {
   "tests/worktrees_spec.lua",
   "tests/worktree_picker_spec.lua",
   "tests/keymaps_spec.lua",
+  "tests/confirm_spec.lua",
+  "tests/review_ui_spec.lua",
   "tests/ui_spec.lua",
   "tests/actions_spec.lua",
 }

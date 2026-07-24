@@ -1,5 +1,6 @@
 local review_store = require("vigit.review")
 local keymaps = require("vigit.keymaps")
+local confirm = require("vigit.confirm")
 
 local M = {}
 
@@ -359,12 +360,7 @@ function M.open(session)
       if not issue then
         return
       end
-      vim.ui.select({ "Cancel", "Delete" }, {
-        prompt = "Delete " .. issue.id .. "?",
-      }, function(choice)
-        if choice ~= "Delete" then
-          return
-        end
+      confirm.ask("Delete " .. issue.id .. "?", function()
         local deleted, delete_err = review_store.delete(session.root, issue.id)
         if not deleted then
           notify(delete_err, vim.log.levels.ERROR)

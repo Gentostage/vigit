@@ -1,3 +1,5 @@
+local confirm = require("vigit.confirm")
+
 local M = {}
 
 local function notify(message, level)
@@ -254,12 +256,8 @@ local function finish_index_change(session, ok, err)
   M.refresh(session)
 end
 
-local function confirm_change(prompt, label, callback)
-  vim.ui.select({ "Cancel", label }, { prompt = prompt }, function(choice)
-    if choice == label then
-      callback()
-    end
-  end)
+local function confirm_change(prompt, callback)
+  confirm.ask(prompt, callback)
 end
 
 function M.discard(session)
@@ -276,7 +274,7 @@ function M.discard(session)
       notify("Unstage this hunk with s before discarding it", vim.log.levels.WARN)
       return
     end
-    confirm_change("Discard this hunk in " .. target.file.path .. "?", "Discard hunk", function()
+    confirm_change("Discard this hunk in " .. target.file.path .. "?", function()
       finish_index_change(
         session,
         session.state.git.discard_hunk(target.file, target.hunk, session.state.cwd)
@@ -297,7 +295,7 @@ function M.discard(session)
   local prompt = file.status == "?"
       and ("Delete untracked file " .. file.path .. "?")
     or ("Discard unstaged changes in " .. file.path .. "?")
-  confirm_change(prompt, "Discard file", function()
+  confirm_change(prompt, function()
     finish_index_change(session, session.state.git.discard_file(file, session.state.cwd))
   end)
 end
@@ -313,10 +311,8 @@ function M.restore_file(session)
   local prompt = untracked
       and ("Delete untracked file " .. file.path .. "? It does not exist in HEAD.")
     or ("Restore " .. file.path .. " to HEAD? Staged and unstaged changes will be lost.")
-  local label = untracked and "Delete file" or "Restore file"
   confirm_change(
     prompt,
-    label,
     function()
       finish_index_change(session, session.state.git.restore_file_to_head(file, session.state.cwd))
     end

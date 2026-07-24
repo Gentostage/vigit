@@ -358,12 +358,12 @@ test("X removes an untracked file selected from one-file diff", function()
   vim.api.nvim_set_current_win(session_a.diff_win)
   vim.api.nvim_win_set_cursor(session_a.diff_win, { row, 0 })
 
-  local old_select = vim.ui.select
-  vim.ui.select = function(choices, _, callback)
-    callback(choices[2])
+  local old_confirm = vim.fn.confirm
+  vim.fn.confirm = function()
+    return 1
   end
   local ok, err = pcall(actions.restore_file, session_a)
-  vim.ui.select = old_select
+  vim.fn.confirm = old_confirm
   assert(ok, err)
   assert(vim.fn.filereadable(path) == 0, "X did not remove the untracked file")
 end)
