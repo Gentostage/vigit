@@ -318,6 +318,56 @@ test("Q returns to the Vigit tab that opened the editor", function()
   )
 end)
 
+test("? opens context-aware keymap help", function()
+  vim.api.nvim_set_current_tabpage(session_a.vigit_tab)
+  vim.api.nvim_set_current_win(session_a.diff_win)
+  local mapping = vim.fn.maparg("?", "n", false, true)
+  assert(mapping and type(mapping.callback) == "function", "diff help mapping is missing")
+  assert(tostring(mapping.desc):match("Show Vigit help"), "diff help mapping has no description")
+
+  mapping.callback()
+  local help_buf = vim.api.nvim_get_current_buf()
+  assert(vim.bo[help_buf].filetype == "vigit-help", "help popup did not open")
+  local lines = vim.api.nvim_buf_get_lines(help_buf, 0, -1, false)
+  assert(
+    vim.iter(lines):any(function(line)
+      return line:match("CURRENT.*DIFF") ~= nil
+    end),
+    "help did not put the current diff context first"
+  )
+  local close_mapping = vim.fn.maparg("q", "n", false, true)
+  assert(close_mapping and type(close_mapping.callback) == "function", "help close mapping is missing")
+  close_mapping.callback()
+end)
+
+test("X removes an untracked file selected from one-file diff", function()
+  local path = repo_a .. "/scratch.md"
+  vim.fn.writefile({ "# scratch" }, path)
+  actions.refresh(session_a)
+  local file = nil
+  for _, candidate in ipairs(session_a.state.diffs.unstaged) do
+    if candidate.path == "scratch.md" then
+      file = candidate
+      break
+    end
+  end
+  assert(file and file.status == "?", "untracked diff lost its status")
+  assert(session_a.state:select_file(file))
+  ui.render(session_a)
+  local row = assert(session_a.state:diff_line_for_file(file), "untracked file header is missing")
+  vim.api.nvim_set_current_win(session_a.diff_win)
+  vim.api.nvim_win_set_cursor(session_a.diff_win, { row, 0 })
+
+  local old_select = vim.ui.select
+  vim.ui.select = function(choices, _, callback)
+    callback(choices[2])
+  end
+  local ok, err = pcall(actions.restore_file, session_a)
+  vim.ui.select = old_select
+  assert(ok, err)
+  assert(vim.fn.filereadable(path) == 0, "X did not remove the untracked file")
+end)
+
 test("T opens a terminal in the active worktree and Q returns to Vigit", function()
   vim.api.nvim_set_current_tabpage(session_a.vigit_tab)
   assert(actions.open_terminal(session_a))
@@ -332,6 +382,44 @@ test("T opens a terminal in the active worktree and Q returns to Vigit", functio
   assert(mapping and type(mapping.callback) == "function", "terminal Q mapping is missing")
   mapping.callback()
   assert(vim.api.nvim_get_current_tabpage() == session_a.vigit_tab, "terminal Q returned to another tab")
+end)
+
+test("d closes and removes an open clean pushed worktree", function()
+  local remote = temporary .. "/worktree-origin.git"
+  local primary = temporary .. "/worktree-primary"
+  local linked = temporary .. "/worktree-linked"
+  vim.fn.mkdir(remote, "p")
+  run(remote, { "git", "init", "--bare", "-q" })
+  create_repo(primary, { "value = 1" })
+  run(primary, { "git", "branch", "-M", "main" })
+  run(primary, { "git", "remote", "add", "origin", remote })
+  run(primary, { "git", "push", "-q", "-u", "origin", "main" })
+  run(remote, { "git", "symbolic-ref", "HEAD", "refs/heads/main" })
+  run(primary, { "git", "branch", "feature" })
+  run(primary, { "git", "worktree", "add", "-q", linked, "feature" })
+  run(linked, { "git", "push", "-q", "-u", "origin", "feature" })
+
+  local linked_session = assert(ui.open({ cwd = linked }))
+  assert(ui.open_editor(linked_session, { path = "sample.py" }, 1))
+  local linked_editor_tab = linked_session.editor.tab
+  vim.api.nvim_set_current_tabpage(linked_session.vigit_tab)
+  local picker = require("vigit.worktree_picker").open(linked_session)
+  local old_input = vim.ui.input
+  vim.ui.input = function(_, callback)
+    callback("DELETE")
+  end
+  local ok, err = pcall(require("vigit.worktree_picker").remove_selected, picker)
+  vim.ui.input = old_input
+  assert(ok, err)
+  assert(
+    not vim.api.nvim_tabpage_is_valid(linked_editor_tab),
+    "worktree editor tab remained open after removal"
+  )
+  assert(vim.fn.isdirectory(linked) == 0, "linked worktree directory still exists")
+  local list = vim.system({ "git", "-C", primary, "worktree", "list", "--porcelain" }, { text = true }):wait()
+  assert(list.code == 0 and not list.stdout:find(linked, 1, true), "worktree is still registered")
+  local branches = vim.system({ "git", "-C", primary, "branch", "--list", "feature" }, { text = true }):wait()
+  assert(branches.code == 0 and branches.stdout:match("feature"), "feature branch was deleted")
 end)
 
 vim.fn.delete(temporary, "rf")

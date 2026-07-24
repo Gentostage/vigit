@@ -43,9 +43,17 @@ local function open_vim_fixture()
     lines_by_buf = {},
     keymaps = 0,
     mappings = {},
+    mapping_options = {},
     width = nil,
   }
   local buffer_options = setmetatable({}, {
+    __index = function(table, key)
+      local value = {}
+      rawset(table, key, value)
+      return value
+    end,
+  })
+  local buffer_vars = setmetatable({}, {
     __index = function(table, key)
       local value = {}
       rawset(table, key, value)
@@ -64,16 +72,18 @@ local function open_vim_fixture()
     notify = function() end,
     schedule = function() end,
     bo = buffer_options,
+    b = buffer_vars,
     cmd = function(command)
       if command == "rightbelow vsplit" then
         fixture.current_win = 101
       end
     end,
     keymap = {
-      set = function(mode, lhs, rhs)
+      set = function(mode, lhs, rhs, opts)
         assert_equal(type(rhs), "function")
         fixture.keymaps = fixture.keymaps + 1
         fixture.mappings[mode .. ":" .. lhs] = true
+        fixture.mapping_options[mode .. ":" .. lhs] = opts
       end,
     },
     api = {
@@ -140,6 +150,7 @@ it("setup registers Vigit command that opens the UI", function()
     assert_truthy(commands.VigitComments)
     assert_truthy(commands.VigitReviews)
     assert_truthy(commands.VigitInstallCodexSkill)
+    assert_truthy(commands.VigitHelp)
     commands.Vigit()
     assert_equal(opened, true)
   end)
@@ -193,10 +204,12 @@ it("open creates windows, buffers, and renders state lines", function()
     assert_equal(fixture.lines_by_buf[1][2], " M a.txt")
     assert_equal(fixture.lines_by_buf[2][2], "@@ a.txt")
     assert_equal(fixture.width, 33)
-    assert_equal(fixture.keymaps, 37)
+    assert_equal(fixture.keymaps, 39)
     assert_equal(fixture.mappings["n:x"], true)
     assert_equal(fixture.mappings["n:X"], true)
     assert_equal(fixture.mappings["n:T"], true)
+    assert_equal(fixture.mappings["n:?"], true)
+    assert_truthy(fixture.mapping_options["n:?"].desc:match("help"))
   end)
 
   reset_ui_modules()
@@ -337,6 +350,13 @@ it("opens a terminal tab in the current worktree and returns with Q", function()
   local terminal_close_registered = false
 
   with_fake_vim({
+    b = setmetatable({}, {
+      __index = function(items, key)
+        local value = {}
+        rawset(items, key, value)
+        return value
+      end,
+    }),
     log = { levels = { ERROR = 4 } },
     notify = function() end,
     schedule = function(callback)
@@ -412,6 +432,82 @@ it("opens a terminal tab in the current worktree and returns with Q", function()
     normal_q()
     assert_equal(current_tab, 10)
     assert_equal(commands[#commands], "tabclose")
+  end)
+
+  reset_ui_modules()
+end)
+
+it("closes the Vigit session registered for a worktree", function()
+  stub_ui_modules({ new = function() end })
+  local closed_session = nil
+
+  with_fake_vim({
+    fn = {
+      fnamemodify = function(path) return path end,
+    },
+  }, function()
+    local ui = require("vigit.ui")
+    local target = { root = "/repo/wt" }
+    local original_session_for = ui.session_for
+    local original_close = ui.close
+    ui.session_for = function(path)
+      assert_equal(path, "/repo/wt")
+      return target
+    end
+    ui.close = function(session)
+      closed_session = session
+      return true
+    end
+
+    local ok, err = ui.close_worktree("/repo/wt")
+    assert_equal(ok, true)
+    assert_equal(err, nil)
+    assert_equal(closed_session, target)
+
+    ui.session_for = original_session_for
+    ui.close = original_close
+  end)
+
+  reset_ui_modules()
+end)
+
+it("returns an exact blocker when a worktree editor has unsaved files", function()
+  stub_ui_modules({ new = function() end })
+  local buffer_options = {
+    [3] = { modified = true },
+  }
+
+  with_fake_vim({
+    bo = buffer_options,
+    log = { levels = { WARN = 3 } },
+    notify = function() end,
+    fn = {
+      fnamemodify = function(path)
+        return path
+      end,
+    },
+    api = {
+      nvim_buf_is_valid = function(buf)
+        return buf == 3
+      end,
+      nvim_buf_get_name = function()
+        return "/repo/wt/file.txt"
+      end,
+    },
+  }, function()
+    local ui = require("vigit.ui")
+    local ok, err = ui.close({
+      root = "/repo/wt",
+      state = { cwd = "/repo/wt" },
+      editor = {
+        buffers = {
+          [3] = {},
+        },
+      },
+    })
+
+    assert_equal(ok, false)
+    assert_truthy(err:match("Unsaved files: file%.txt"))
   end)
 
   reset_ui_modules()

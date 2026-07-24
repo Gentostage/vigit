@@ -22,7 +22,16 @@ end
 
 package.path = "./lua/?.lua;./lua/?/init.lua;" .. package.path
 
-local files = { "tests/parser_spec.lua", "tests/state_spec.lua", "tests/git_spec.lua", "tests/ui_spec.lua", "tests/actions_spec.lua" }
+local files = {
+  "tests/parser_spec.lua",
+  "tests/state_spec.lua",
+  "tests/git_spec.lua",
+  "tests/worktrees_spec.lua",
+  "tests/worktree_picker_spec.lua",
+  "tests/keymaps_spec.lua",
+  "tests/ui_spec.lua",
+  "tests/actions_spec.lua",
+}
 for _, file in ipairs(files) do
   local ok, err = pcall(dofile, file)
   if not ok and not tostring(err):match("No such file") then

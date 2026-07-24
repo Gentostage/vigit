@@ -1,5 +1,6 @@
 local State = require("vigit.state")
 local highlights = require("vigit.highlights")
+local keymaps = require("vigit.keymaps")
 
 local M = {}
 
@@ -166,7 +167,7 @@ local function decorate_editor_window(session, buf, win)
     "%<",
     display_path,
     "%=",
-    "%#VigitPanelHint# :w save · Q back ",
+    "%#VigitPanelHint# :w save · Q back · :VigitHelp ",
   }), { scope = "local", win = win })
 end
 
@@ -202,13 +203,10 @@ local function attach_editor_buffer(session, buf, win)
     editor.buffers[buf] = {
       previous_q_mapping = local_normal_mapping(buf, "Q"),
     }
-    vim.keymap.set("n", "Q", function()
-      M.return_from_editor(session)
-    end, {
-      buffer = buf,
-      silent = true,
-      nowait = true,
-      desc = "Return to Vigit",
+    keymaps.bind(buf, "editor", {
+      back = function()
+        M.return_from_editor(session)
+      end,
     })
   end
   decorate_editor_window(session, buf, win)
@@ -267,61 +265,83 @@ local function forget_session(session)
   end
 end
 
-function M.close(session)
+function M.close(session, opts)
   session = session or active_session
+  opts = opts or {}
   if not session then
     return false
   end
   local modified = session.editor and modified_editor_buffers(session, session.editor) or {}
   if #modified > 0 then
-    notify("Unsaved files: " .. table.concat(modified, ", ") .. ". Use :w before closing", vim.log.levels.WARN)
-    return false
+    local message = "Unsaved files: " .. table.concat(modified, ", ") .. ". Use :w before closing"
+    notify(message, vim.log.levels.WARN)
+    return false, message
+  end
+  if opts.close_editor and session.editor and valid_tab(session.editor.tab) then
+    vim.api.nvim_set_current_tabpage(session.editor.tab)
+    local ok, err = pcall(vim.cmd, "tabclose")
+    if not ok then
+      local message = tostring(err)
+      notify(message, vim.log.levels.ERROR)
+      return false, message
+    end
   end
   if valid_tab(session.vigit_tab) then
     vim.api.nvim_set_current_tabpage(session.vigit_tab)
     local ok, err = pcall(vim.cmd, "tabclose")
     if not ok then
-      notify(tostring(err), vim.log.levels.ERROR)
-      return false
+      local message = tostring(err)
+      notify(message, vim.log.levels.ERROR)
+      return false, message
     end
   end
   forget_session(session)
-  return true
-end
-
-local function map(session, buf, lhs, fn)
-  vim.keymap.set("n", lhs, function()
-    fn(session)
-  end, { buffer = buf, silent = true, nowait = true })
+  return true, nil
 end
 
 local function attach_keymaps(session)
   local actions = require("vigit.actions")
-  for _, buf in ipairs({ session.changes_buf, session.diff_buf }) do
-    map(session, buf, "q", actions.close)
-    map(session, buf, "r", actions.refresh)
-    map(session, buf, "f", actions.toggle_full_context)
-    map(session, buf, "s", actions.stage)
-    map(session, buf, "x", actions.discard)
-    map(session, buf, "X", actions.restore_file)
-    map(session, buf, "a", actions.show_all_files)
-    map(session, buf, "e", actions.edit_file)
-    map(session, buf, "c", actions.add_review_comment)
-    map(session, buf, "C", actions.open_reviews)
-    map(session, buf, "P", actions.prepare_review)
-    map(session, buf, "w", actions.open_worktrees)
-    map(session, buf, "T", actions.open_terminal)
-    map(session, buf, "]w", actions.next_worktree)
-    map(session, buf, "[w", actions.previous_worktree)
-    map(session, buf, "<CR>", actions.select_file)
+  local function call(fn)
+    return function()
+      fn(session)
+    end
   end
-  vim.keymap.set("x", "c", function()
+  local function common(context)
+    return {
+      select_file = call(actions.select_file),
+      edit_file = call(actions.edit_file),
+      stage = call(actions.stage),
+      discard = call(actions.discard),
+      restore_file = call(actions.restore_file),
+      refresh = call(actions.refresh),
+      toggle_context = call(actions.toggle_full_context),
+      show_all = call(actions.show_all_files),
+      comment = call(actions.add_review_comment),
+      comments = call(actions.open_reviews),
+      prompt = call(actions.prepare_review),
+      worktrees = call(actions.open_worktrees),
+      terminal = call(actions.open_terminal),
+      previous_worktree = call(actions.previous_worktree),
+      next_worktree = call(actions.next_worktree),
+      show_help = function()
+        require("vigit.help").open(context)
+      end,
+      close = call(actions.close),
+    }
+  end
+
+  local changes_handlers = common("changes")
+  changes_handlers.toggle_tree = call(actions.toggle_changes_view)
+  changes_handlers.collapse_directory = call(actions.collapse_directory)
+  changes_handlers.expand_directory = call(actions.expand_directory)
+  keymaps.bind(session.changes_buf, "changes", changes_handlers)
+
+  local diff_handlers = common("diff")
+  diff_handlers.definition = call(actions.goto_definition)
+  diff_handlers.visual_comment = function()
     actions.add_review_comment(session, { visual = true })
-  end, { buffer = session.diff_buf, silent = true, nowait = true })
-  map(session, session.diff_buf, "gd", actions.goto_definition)
-  map(session, session.changes_buf, "t", actions.toggle_changes_view)
-  map(session, session.changes_buf, "h", actions.collapse_directory)
-  map(session, session.changes_buf, "l", actions.expand_directory)
+  end
+  keymaps.bind(session.diff_buf, "diff", diff_handlers)
 end
 
 function M.open(opts)
@@ -474,6 +494,18 @@ function M.session_for(path)
   return session_is_valid(session) and session or nil
 end
 
+function M.close_worktree(path)
+  local session = M.session_for(path)
+  if not session then
+    return true, nil
+  end
+  local ok, err = M.close(session, { close_editor = true })
+  if not ok then
+    return false, err or ("Cannot close the Vigit tab for " .. worktree_name(path))
+  end
+  return true, nil
+end
+
 function M.focus_worktree(path)
   local session = M.session_for(path)
   if session then
@@ -588,7 +620,7 @@ function M.open_terminal(session)
     "%#VigitPanelTitle#  VIGIT · TERMINAL · ",
     name,
     "%=",
-    "%#VigitPanelHint# exit · Q/<C-q> back ",
+    "%#VigitPanelHint# exit · Q/<C-q> back · :VigitHelp ",
   }), { scope = "local", win = win })
 
   local closing = false
@@ -607,18 +639,7 @@ function M.open_terminal(session)
     end
   end
 
-  vim.keymap.set("n", "Q", close_terminal, {
-    buffer = buf,
-    silent = true,
-    nowait = true,
-    desc = "Return to Vigit",
-  })
-  vim.keymap.set("t", "<C-q>", close_terminal, {
-    buffer = buf,
-    silent = true,
-    nowait = true,
-    desc = "Return to Vigit",
-  })
+  keymaps.bind(buf, "terminal", { back = close_terminal })
   vim.api.nvim_create_autocmd("TermClose", {
     group = session.augroup,
     buffer = buf,

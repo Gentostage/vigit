@@ -1,4 +1,5 @@
 local git = require("vigit.git")
+local keymaps = require("vigit.keymaps")
 local worktrees = require("vigit.worktrees")
 
 local M = {}
@@ -62,15 +63,37 @@ local function display_pad(value, width)
 end
 
 local function status_text(entry)
-  local stats = { entry.changed == 0 and "clean" or string.format("%d file%s", entry.changed, entry.changed == 1 and "" or "s") }
-  if entry.staged > 0 then
-    stats[#stats + 1] = "S:" .. entry.staged
+  local changed = tonumber(entry.changed) or 0
+  local staged = tonumber(entry.staged) or 0
+  local untracked = tonumber(entry.untracked) or 0
+  local review_count = tonumber(entry.review_count) or 0
+  local stats = { changed == 0 and "clean" or string.format("%d file%s", changed, changed == 1 and "" or "s") }
+  if staged > 0 then
+    stats[#stats + 1] = "S:" .. staged
   end
-  if entry.untracked > 0 then
-    stats[#stats + 1] = "?:" .. entry.untracked
+  if untracked > 0 then
+    stats[#stats + 1] = "?:" .. untracked
   end
-  if entry.review_count > 0 then
-    stats[#stats + 1] = "C:" .. entry.review_count
+  if review_count > 0 then
+    stats[#stats + 1] = "C:" .. review_count
+  end
+  if entry.detached then
+    stats[#stats + 1] = "DETACHED"
+  elseif not entry.upstream then
+    stats[#stats + 1] = "NO UPSTREAM"
+  else
+    local ahead = tonumber(entry.ahead) or 0
+    local behind = tonumber(entry.behind) or 0
+    if ahead == 0 and behind == 0 then
+      stats[#stats + 1] = "PUSHED"
+    else
+      if ahead > 0 then
+        stats[#stats + 1] = "↑" .. ahead
+      end
+      if behind > 0 then
+        stats[#stats + 1] = "↓" .. behind
+      end
+    end
   end
   if entry.open then
     stats[#stats + 1] = "OPEN"
@@ -134,35 +157,74 @@ local function remove_selected(picker)
   if not entry then
     return
   end
-  if entry.primary then
-    notify("ROOT is the primary checkout and cannot be removed", vim.log.levels.WARN)
-    return
-  end
-  if entry.open then
-    notify("Close the Vigit tab for " .. entry.name .. " before removing it", vim.log.levels.WARN)
+  local blocker = worktrees.removal_blocker(entry)
+  if blocker then
+    notify(blocker, vim.log.levels.WARN)
     return
   end
 
-  local changes = entry.changed == 1 and "1 changed file" or string.format("%d changed files", entry.changed)
+  local command_root = picker.session.root
+  for _, candidate in ipairs(picker.entries) do
+    if candidate.primary then
+      command_root = candidate.path
+      break
+    end
+  end
+  local deleting_current = entry.path == picker.session.root
   vim.ui.input({
     prompt = string.format(
-      "Remove WT %s (%s, %s)? Branch will be kept. Type DELETE: ",
+      "Remove WT %s (%s, pushed and clean)? Branch will be kept. Type DELETE: ",
       entry.name,
-      entry.branch,
-      changes
+      entry.branch
     ),
   }, function(answer)
     if answer ~= "DELETE" then
       notify("Worktree removal cancelled")
       return
     end
-    local ok, err = git.remove_worktree(picker.session.root, entry.path, entry.changed > 0)
+    local fresh_entries, list_err = worktrees.list(command_root)
+    if not fresh_entries then
+      notify("Cannot revalidate worktree: " .. tostring(list_err), vim.log.levels.ERROR)
+      return
+    end
+    local fresh_entry = nil
+    for _, candidate in ipairs(fresh_entries) do
+      if candidate.path == entry.path then
+        fresh_entry = candidate
+        break
+      end
+    end
+    if not fresh_entry then
+      notify("Worktree is no longer registered: " .. entry.path, vim.log.levels.WARN)
+      return
+    end
+    local fresh_blocker = worktrees.removal_blocker(fresh_entry)
+    if fresh_blocker then
+      notify("Worktree changed since confirmation: " .. fresh_blocker, vim.log.levels.WARN)
+      return
+    end
+    entry = fresh_entry
+
+    local ui = require("vigit.ui")
+    local closed, close_err = ui.close_worktree(entry.path)
+    if not closed then
+      notify(close_err or ("Cannot close " .. entry.name), vim.log.levels.ERROR)
+      return
+    end
+    local ok, err = git.remove_worktree(command_root, entry.path, false)
     if not ok then
       notify(err, vim.log.levels.ERROR)
+      if deleting_current then
+        ui.focus_worktree(entry.path)
+      end
       return
     end
     notify("Removed WT; branch kept: " .. entry.branch)
-    render(picker, picker.session.root)
+    if deleting_current then
+      ui.focus_worktree(command_root)
+    elseif picker.win and vim.api.nvim_win_is_valid(picker.win) then
+      render(picker, command_root)
+    end
   end)
 end
 
@@ -201,7 +263,7 @@ render = function(picker, selected_path)
     lines[#lines + 1] = "  No worktrees"
   end
   lines[#lines + 1] = ""
-  lines[#lines + 1] = "  ↵ open · d delete WT · r refresh · q close · [w/]w cycle open tabs"
+  lines[#lines + 1] = "  ↵ open · d delete WT · r refresh · ? help · q close"
 
   vim.bo[picker.buf].modifiable = true
   vim.api.nvim_buf_set_lines(picker.buf, 0, -1, false, lines)
@@ -275,33 +337,35 @@ function M.open(session)
     namespace = namespace,
   }
 
-  local function map(lhs, callback)
-    vim.keymap.set("n", lhs, callback, { buffer = buf, silent = true, nowait = true })
-  end
-  map("q", function()
-    close(picker)
-  end)
-  map("<Esc>", function()
-    close(picker)
-  end)
-  map("r", function()
-    local selected = selected_entry(picker)
-    render(picker, selected and selected.path or session.root)
-  end)
-  map("d", function()
-    remove_selected(picker)
-  end)
-  map("<CR>", function()
-    local entry = selected_entry(picker)
-    if not entry then
-      return
-    end
-    close(picker)
-    require("vigit.ui").focus_worktree(entry.path)
-  end)
+  keymaps.bind(buf, "worktrees", {
+    close = function()
+      close(picker)
+    end,
+    refresh = function()
+      local selected = selected_entry(picker)
+      render(picker, selected and selected.path or session.root)
+    end,
+    delete = function()
+      remove_selected(picker)
+    end,
+    open = function()
+      local entry = selected_entry(picker)
+      if not entry then
+        return
+      end
+      close(picker)
+      require("vigit.ui").focus_worktree(entry.path)
+    end,
+    show_help = function()
+      require("vigit.help").open("worktrees")
+    end,
+  })
 
   render(picker, session.root)
   return picker
 end
+
+M.status_text = status_text
+M.remove_selected = remove_selected
 
 return M

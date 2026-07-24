@@ -309,9 +309,14 @@ function M.restore_file(session)
     notify("No file under cursor", vim.log.levels.WARN)
     return
   end
+  local untracked = file.status == "?"
+  local prompt = untracked
+      and ("Delete untracked file " .. file.path .. "? It does not exist in HEAD.")
+    or ("Restore " .. file.path .. " to HEAD? Staged and unstaged changes will be lost.")
+  local label = untracked and "Delete file" or "Restore file"
   confirm_change(
-    "Restore " .. file.path .. " to HEAD? Staged and unstaged changes will be lost.",
-    "Restore file",
+    prompt,
+    label,
     function()
       finish_index_change(session, session.state.git.restore_file_to_head(file, session.state.cwd))
     end

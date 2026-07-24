@@ -1,4 +1,5 @@
 local review_store = require("vigit.review")
+local keymaps = require("vigit.keymaps")
 
 local M = {}
 
@@ -69,7 +70,7 @@ function M.open(session, target, opts)
       tostring(target.line),
       target.line_end ~= target.line and ("-" .. tostring(target.line_end)) or "",
       "%=",
-      "%#VigitPanelHint# :w/Ctrl-S save · q close ",
+      "%#VigitPanelHint# :w/Ctrl-S save · ? help · q close ",
     }), { scope = "local", win = win })
   end
 
@@ -136,18 +137,20 @@ function M.open(session, target, opts)
     buffer = buf,
     callback = save,
   })
-  vim.keymap.set("n", "q", function()
-    close(false)
-  end, { buffer = buf, silent = true, nowait = true })
-  vim.keymap.set("n", "<Esc>", function()
-    close(false)
-  end, { buffer = buf, silent = true, nowait = true })
-  vim.keymap.set({ "n", "i" }, "<C-s>", function()
-    if vim.api.nvim_get_mode().mode:sub(1, 1) == "i" then
-      vim.cmd("stopinsert")
-    end
-    save()
-  end, { buffer = buf, silent = true, nowait = true })
+  keymaps.bind(buf, "comment_editor", {
+    close = function()
+      close(false)
+    end,
+    save = function()
+      if vim.api.nvim_get_mode().mode:sub(1, 1) == "i" then
+        vim.cmd("stopinsert")
+      end
+      save()
+    end,
+    show_help = function()
+      require("vigit.help").open("comment_editor")
+    end,
+  })
   update_title()
   vim.cmd("startinsert")
 

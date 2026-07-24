@@ -31,6 +31,12 @@ function M.setup()
     force = true,
     desc = "Compatibility alias for :VigitComments",
   })
+  vim.api.nvim_create_user_command("VigitHelp", function()
+    require("vigit.help").open()
+  end, {
+    force = true,
+    desc = "Show Vigit key mappings",
+  })
   vim.api.nvim_create_user_command("VigitInstallCodexSkill", function(opts)
     local function install(force)
       local ok, result = require("vigit.skill").install({ force = force })

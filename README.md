@@ -27,6 +27,10 @@ comments back to coding agents.
   one-file mode.
 - Switch between task worktrees from a modal view with branch and change
   counters.
+- Inspect every Vigit shortcut from context-aware `?` help without requiring
+  an external keymap plugin.
+- Remove clean linked worktrees after Vigit verifies that all local commits
+  are present on their upstream branch.
 - Attach local multi-line comments to exact diff ranges and see their markers
   next to Git changes.
 - Browse, edit, delete, and hand all comments to Codex through one generated
@@ -135,12 +139,19 @@ that must be saved or explicitly discarded.
 | `C` | Open the comment list |
 | `s` | Stage an unstaged file/hunk or unstage a staged file/hunk |
 | `x` | Discard the unstaged hunk under the cursor, or the whole unstaged file |
-| `X` | Restore the whole file to `HEAD`, including staged and unstaged changes |
+| `X` | Restore the whole file to `HEAD`; delete it when it is untracked |
 | `r` | Refresh Git status and diff |
 | `f` | Toggle compact and expanded diff context |
+| `?` | Open context-aware Vigit keymap help |
+| `:VigitHelp` | Open the complete keymap reference from any buffer |
 | `q` | Close the Vigit interface |
 | `Q` | Return from the edit tab to Vigit |
 | `:qa!` | Exit Neovim completely |
+
+Vigit stores its mappings and descriptions in one internal registry. Every
+buffer-local mapping has a `desc`, so WhichKey can discover it when installed,
+while Vigit's own `?` help works without WhichKey. Normal editor and terminal
+buffers keep their standard `?` behavior; use `:VigitHelp` there.
 
 Every discard action asks for confirmation. A staged hunk must first be
 unstaged with `s`; this prevents an accidental `x` from deleting indexed
@@ -165,6 +176,7 @@ Press `C` for the complete list:
 | `e` | Edit the selected comment |
 | `d` | Delete it after confirmation |
 | `r` | Refresh comments and Git state |
+| `?` | Show comment-list mappings |
 | `q` | Close the list |
 
 Structured JSON remains the internal source for editing. After every
@@ -194,8 +206,15 @@ completed comments manually.
 Use `:VigitWorktrees` or `w` to open the worktree modal. Selecting a worktree
 focuses its existing Vigit tab or opens a new tab with a tab-local working
 directory. Inside the modal, `d` removes a linked `WT` after typing `DELETE`;
-the primary `ROOT` cannot be removed, open Vigit worktrees must be closed
-first, and the Git branch is always kept.
+the Git branch is always kept. `PUSHED`, `↑N`, `↓N`, and `NO UPSTREAM` show
+the relationship with the configured upstream. Vigit allows removal only when
+the worktree is not `ROOT`, its Git status is clean, and `ahead == 0`. If that
+worktree has an open Vigit tab, Vigit closes it automatically. Unsaved editor
+buffers, uncommitted files, detached HEAD, a missing upstream, or unpushed
+commits block removal with an exact reason. The check uses local remote-tracking
+refs and never performs a hidden network fetch. Vigit repeats the safety check
+after the `DELETE` confirmation, immediately before closing and removing the
+worktree.
 
 ## Plugin-friendly edit mode
 

@@ -122,6 +122,29 @@ function M.branch(cwd)
   return "detached@" .. trim(head), nil
 end
 
+function M.upstream_status(cwd)
+  local upstream, upstream_err =
+    result_or_error(run("rev-parse --abbrev-ref --symbolic-full-name @{upstream}", cwd))
+  if upstream_err then
+    return nil, upstream_err
+  end
+  upstream = trim(upstream)
+
+  local counts, counts_err = result_or_error(run("rev-list --left-right --count @{upstream}...HEAD", cwd))
+  if counts_err then
+    return nil, counts_err
+  end
+  local behind, ahead = trim(counts):match("^(%d+)%s+(%d+)$")
+  if not behind or not ahead then
+    return nil, "Unable to read upstream divergence"
+  end
+  return {
+    name = upstream,
+    ahead = tonumber(ahead),
+    behind = tonumber(behind),
+  }, nil
+end
+
 function M.worktree_list(cwd)
   local output, err = result_or_error(run("worktree list --porcelain", cwd))
   if err then
@@ -256,6 +279,22 @@ local function untracked_diff(path, cwd, context)
   return files, nil
 end
 
+local function hydrate_diff_files(files, status_files)
+  local status_by_path = {}
+  for _, file in ipairs(status_files or {}) do
+    status_by_path[file.path] = file
+  end
+  for _, file in ipairs(files or {}) do
+    local status_file = status_by_path[file.path]
+    if status_file then
+      file.status = status_file.status
+      file.section = status_file.section or file.section
+      file.old_path = file.old_path or status_file.old_path
+    end
+  end
+  return files
+end
+
 function M.diff(section, cwd, context, status_files)
   local unified = tonumber(context or 3) or 3
   local command = "diff --no-ext-diff --unified=" .. unified
@@ -280,13 +319,14 @@ function M.diff(section, cwd, context, status_files)
       end
     end
   end
-  return files, nil
+  return hydrate_diff_files(files, status_files), nil
 end
 
 function M.diff_file(file, cwd, context)
   local unified = tonumber(context or 3) or 3
   if file.section == "unstaged" and file.status == "?" then
-    return untracked_diff(file.path, cwd, unified)
+    local files, err = untracked_diff(file.path, cwd, unified)
+    return hydrate_diff_files(files, { file }), err
   end
   local command = "diff --no-ext-diff --unified=" .. unified
   if file.section == "staged" then
@@ -297,7 +337,7 @@ function M.diff_file(file, cwd, context)
   if err then
     return nil, err
   end
-  return parser.parse_diff(output, file.section), nil
+  return hydrate_diff_files(parser.parse_diff(output, file.section), { file }), nil
 end
 
 local function read_worktree(path, cwd)

@@ -19,6 +19,34 @@ local function review_count(cwd)
   return tonumber(count) or 0
 end
 
+function M.removal_blocker(entry)
+  if entry.primary then
+    return "ROOT worktree cannot be removed"
+  end
+  if entry.error then
+    return "Cannot verify worktree status: " .. tostring(entry.error)
+  end
+  if (entry.changed or 0) > 0 then
+    local changed = entry.changed == 1 and "1 changed file" or string.format("%d changed files", entry.changed)
+    return "Worktree has " .. changed
+  end
+  if entry.detached then
+    return "A detached worktree cannot be removed safely"
+  end
+  if not entry.upstream then
+    return entry.upstream_error and ("Cannot verify upstream: " .. tostring(entry.upstream_error))
+      or "Branch has no upstream"
+  end
+  if entry.ahead == nil then
+    return "Cannot verify unpushed commits"
+  end
+  if entry.ahead > 0 then
+    local commits = entry.ahead == 1 and "1 unpushed commit" or string.format("%d unpushed commits", entry.ahead)
+    return "Branch has " .. commits
+  end
+  return nil
+end
+
 function M.list(cwd, opts)
   opts = opts or {}
   local git = opts.git or default_git
@@ -38,6 +66,16 @@ function M.list(cwd, opts)
     entry.current = entry.path == current_root
     entry.open = opts.is_open and opts.is_open(entry.path) or false
     entry.review_count = review_count(entry.path)
+    if not entry.detached then
+      local upstream, upstream_err = git.upstream_status(entry.path)
+      if upstream then
+        entry.upstream = upstream.name
+        entry.ahead = upstream.ahead
+        entry.behind = upstream.behind
+      else
+        entry.upstream_error = upstream_err
+      end
+    end
     local summary, summary_err = git.worktree_summary(entry.path)
     if summary then
       entry.changed = summary.changed

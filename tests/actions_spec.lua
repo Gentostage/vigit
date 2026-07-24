@@ -389,6 +389,55 @@ it("restores a whole file to HEAD after confirmation", function()
   reset_actions()
 end)
 
+it("describes restoring an untracked file as deletion", function()
+  reset_actions()
+  local restored_file = nil
+  package.loaded["vigit.ui"] = { render = function() end }
+
+  with_fake_vim({
+    api = {
+      nvim_get_current_buf = function() return 5 end,
+      nvim_win_get_cursor = function() return { 2, 0 } end,
+    },
+    ui = {
+      select = function(choices, opts, callback)
+        assert_equal(choices[2], "Delete file")
+        assert_truthy(opts.prompt:match("Delete untracked file"))
+        assert_truthy(opts.prompt:match("scratch%.md"))
+        callback("Delete file")
+      end,
+    },
+    log = { levels = { ERROR = 4, INFO = 2, WARN = 3 } },
+    notify = function() end,
+  }, function()
+    local file = { path = "scratch.md", section = "unstaged", status = "?" }
+    local actions = require("vigit.actions")
+    actions.restore_file({
+      changes_buf = 5,
+      diff_buf = 6,
+      state = {
+        cwd = "/tmp/repo",
+        file_at_line = function()
+          return file
+        end,
+        git = {
+          restore_file_to_head = function(actual_file)
+            restored_file = actual_file
+            return true, nil
+          end,
+        },
+        refresh = function()
+          return true, nil
+        end,
+      },
+    })
+
+    assert_equal(restored_file, file)
+  end)
+
+  reset_actions()
+end)
+
 it("opens a terminal for the active Vigit session", function()
   reset_actions()
   local opened_session = nil

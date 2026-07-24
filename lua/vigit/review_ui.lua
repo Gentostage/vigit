@@ -1,4 +1,5 @@
 local review_store = require("vigit.review")
+local keymaps = require("vigit.keymaps")
 
 local M = {}
 
@@ -170,12 +171,19 @@ local function open_prompt(result)
       vim.api.nvim_win_close(win, true)
     end
   end
-  vim.keymap.set("n", "q", close, { buffer = buf, silent = true, nowait = true })
-  vim.keymap.set("n", "<Esc>", close, { buffer = buf, silent = true, nowait = true })
-  vim.keymap.set("n", "y", function()
-    local ok = pcall(vim.fn.setreg, "+", result.prompt)
-    notify(ok and "Prompt copied" or ("Prompt saved at " .. result.comments_path), ok and nil or vim.log.levels.WARN)
-  end, { buffer = buf, silent = true, nowait = true })
+  keymaps.bind(buf, "review_prompt", {
+    close = close,
+    copy = function()
+      local ok = pcall(vim.fn.setreg, "+", result.prompt)
+      notify(
+        ok and "Prompt copied" or ("Prompt saved at " .. result.comments_path),
+        ok and nil or vim.log.levels.WARN
+      )
+    end,
+    show_help = function()
+      require("vigit.help").open("review_prompt")
+    end,
+  })
 end
 
 function M.prepare(session)
@@ -310,7 +318,7 @@ function M.open(session)
       lines[#lines + 1] = "  No comments. Close this window and press c on a changed line."
     end
     lines[#lines + 1] = ""
-    lines[#lines + 1] = "  Enter source · e edit · d delete · r refresh · q close"
+    lines[#lines + 1] = "  Enter source · e edit · d delete · r refresh · ? help · q close"
     vim.bo[buf].modifiable = true
     vim.api.nvim_buf_set_lines(buf, 0, -1, false, lines)
     vim.bo[buf].modifiable = false
@@ -330,50 +338,54 @@ function M.open(session)
     render()
   end
 
-  vim.keymap.set("n", "q", close, { buffer = buf, silent = true, nowait = true })
-  vim.keymap.set("n", "<Esc>", close, { buffer = buf, silent = true, nowait = true })
-  vim.keymap.set("n", "<CR>", function()
-    local issue = selected_issue()
-    if issue and jump_to_source(session, issue) then
+  keymaps.bind(buf, "comments", {
+    close = close,
+    open = function()
+      local issue = selected_issue()
+      if issue and jump_to_source(session, issue) then
+        close()
+      end
+    end,
+    edit = function()
+      local issue = selected_issue()
+      if not issue then
+        return
+      end
       close()
-    end
-  end, { buffer = buf, silent = true, nowait = true })
-  vim.keymap.set("n", "e", function()
-    local issue = selected_issue()
-    if not issue then
-      return
-    end
-    close()
-    edit_comment(session, issue)
-  end, { buffer = buf, silent = true, nowait = true })
-  vim.keymap.set("n", "d", function()
-    local issue = selected_issue()
-    if not issue then
-      return
-    end
-    vim.ui.select({ "Cancel", "Delete" }, {
-      prompt = "Delete " .. issue.id .. "?",
-    }, function(choice)
-      if choice ~= "Delete" then
+      edit_comment(session, issue)
+    end,
+    delete = function()
+      local issue = selected_issue()
+      if not issue then
         return
       end
-      local deleted, delete_err = review_store.delete(session.root, issue.id)
-      if not deleted then
-        notify(delete_err, vim.log.levels.ERROR)
+      vim.ui.select({ "Cancel", "Delete" }, {
+        prompt = "Delete " .. issue.id .. "?",
+      }, function(choice)
+        if choice ~= "Delete" then
+          return
+        end
+        local deleted, delete_err = review_store.delete(session.root, issue.id)
+        if not deleted then
+          notify(delete_err, vim.log.levels.ERROR)
+          return
+        end
+        notify(issue.id .. " deleted")
+        reload()
+      end)
+    end,
+    refresh = function()
+      local refreshed, refresh_err = session.state:refresh()
+      if not refreshed then
+        notify(refresh_err, vim.log.levels.ERROR)
         return
       end
-      notify(issue.id .. " deleted")
       reload()
-    end)
-  end, { buffer = buf, silent = true, nowait = true })
-  vim.keymap.set("n", "r", function()
-    local refreshed, refresh_err = session.state:refresh()
-    if not refreshed then
-      notify(refresh_err, vim.log.levels.ERROR)
-      return
-    end
-    reload()
-  end, { buffer = buf, silent = true, nowait = true })
+    end,
+    show_help = function()
+      require("vigit.help").open("comments")
+    end,
+  })
   session.review_panel_reload = reload
   render()
   return { buf = buf, win = win }
