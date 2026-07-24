@@ -126,6 +126,7 @@ that must be saved or explicitly discarded.
 | `a` | Return to the all-files diff |
 | `e` | Edit the selected file in a normal Neovim tab |
 | `gd` | Open the real file at the cursor and request its LSP definition |
+| `T` | Open a terminal tab rooted in the active worktree |
 | `w` | Open the worktree picker |
 | `[w` / `]w` | Move between open Vigit worktree tabs |
 | `c` | Add a comment, or edit the comment marked on the current diff line |
@@ -133,11 +134,19 @@ that must be saved or explicitly discarded.
 | `P` | Copy/open a Codex prompt for the current comments |
 | `C` | Open the comment list |
 | `s` | Stage an unstaged file/hunk or unstage a staged file/hunk |
+| `x` | Discard the unstaged hunk under the cursor, or the whole unstaged file |
+| `X` | Restore the whole file to `HEAD`, including staged and unstaged changes |
 | `r` | Refresh Git status and diff |
 | `f` | Toggle compact and expanded diff context |
 | `q` | Close the Vigit interface |
 | `Q` | Return from the edit tab to Vigit |
 | `:qa!` | Exit Neovim completely |
+
+Every discard action asks for confirmation. A staged hunk must first be
+unstaged with `s`; this prevents an accidental `x` from deleting indexed
+work. Untracked files are deleted only after the same confirmation. In a
+Vigit terminal, run `exit`, press normal-mode `Q`, or press `Ctrl-Q` to close
+the terminal tab and return to the Vigit tab that opened it.
 
 ## Comment workflow
 

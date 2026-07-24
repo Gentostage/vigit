@@ -302,12 +302,15 @@ local function attach_keymaps(session)
     map(session, buf, "r", actions.refresh)
     map(session, buf, "f", actions.toggle_full_context)
     map(session, buf, "s", actions.stage)
+    map(session, buf, "x", actions.discard)
+    map(session, buf, "X", actions.restore_file)
     map(session, buf, "a", actions.show_all_files)
     map(session, buf, "e", actions.edit_file)
     map(session, buf, "c", actions.add_review_comment)
     map(session, buf, "C", actions.open_reviews)
     map(session, buf, "P", actions.prepare_review)
     map(session, buf, "w", actions.open_worktrees)
+    map(session, buf, "T", actions.open_terminal)
     map(session, buf, "]w", actions.next_worktree)
     map(session, buf, "[w", actions.previous_worktree)
     map(session, buf, "<CR>", actions.select_file)
@@ -564,6 +567,67 @@ function M.return_from_editor(session)
     end
   end
   finish_editor(session, { focus = true })
+  return true
+end
+
+function M.open_terminal(session)
+  vim.cmd("tabnew")
+  vim.cmd("tcd " .. vim.fn.fnameescape(session.root))
+  local terminal_tab = vim.api.nvim_get_current_tabpage()
+  local ok, err = pcall(vim.cmd, "terminal")
+  if not ok then
+    pcall(vim.cmd, "tabclose")
+    notify(tostring(err), vim.log.levels.ERROR)
+    return false
+  end
+
+  local buf = vim.api.nvim_get_current_buf()
+  local win = vim.api.nvim_get_current_win()
+  local name = tostring(session.worktree_name or session.root):gsub("%%", "%%%%")
+  vim.api.nvim_set_option_value("winbar", table.concat({
+    "%#VigitPanelTitle#  VIGIT · TERMINAL · ",
+    name,
+    "%=",
+    "%#VigitPanelHint# exit · Q/<C-q> back ",
+  }), { scope = "local", win = win })
+
+  local closing = false
+  local function close_terminal()
+    if closing then
+      return
+    end
+    closing = true
+    if valid_tab(terminal_tab) then
+      vim.api.nvim_set_current_tabpage(terminal_tab)
+      pcall(vim.cmd, "tabclose")
+    end
+    if valid_tab(session.vigit_tab) then
+      vim.api.nvim_set_current_tabpage(session.vigit_tab)
+      set_active_session(session)
+    end
+  end
+
+  vim.keymap.set("n", "Q", close_terminal, {
+    buffer = buf,
+    silent = true,
+    nowait = true,
+    desc = "Return to Vigit",
+  })
+  vim.keymap.set("t", "<C-q>", close_terminal, {
+    buffer = buf,
+    silent = true,
+    nowait = true,
+    desc = "Return to Vigit",
+  })
+  vim.api.nvim_create_autocmd("TermClose", {
+    group = session.augroup,
+    buffer = buf,
+    once = true,
+    callback = function()
+      vim.schedule(close_terminal)
+    end,
+  })
+  vim.cmd("startinsert")
   return true
 end
 

@@ -387,18 +387,18 @@ function M.decorate(session)
   local selected = session.state:selected_file()
   local diff_title = "DIFF · ALL FILES"
   local diff_detail = nil
-  local diff_hint = "↵ file · e edit · gd definition · c comment · C comments · P prompt · s index · q close"
+  local diff_hint = "↵ file · e edit · gd def · s index · x undo · X HEAD · T term · f ctx · c/C/P review · q close"
   if selected then
     diff_title = "DIFF · ONE FILE"
     diff_detail = selected.path
-    diff_hint = "e edit · gd definition · a all · c comment · C comments · P prompt · s index · q close"
+    diff_hint = "e edit · gd def · a all · s index · x undo · X HEAD · T term · f ctx · c/C/P review · q close"
   end
 
   decorate_window(
     session.changes_win,
     "CHANGES · " .. string.upper(session.state.changes_mode),
     "VigitChangesNormal",
-    "w worktrees · c comment · C comments · P prompt · t tree · ↵ file · q close",
+    "↵ file · t tree · w WT · T term · s index · x undo · X HEAD · c/C/P review · q close",
     session.worktree_name .. " · " .. session.branch .. " · " .. tostring(session.review_count or 0) .. " comments"
   )
   local worktree_detail =

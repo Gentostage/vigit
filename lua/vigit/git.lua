@@ -360,6 +360,51 @@ function M.unstage_file(file, cwd)
   return err == nil, err
 end
 
+local function file_pathspec(file)
+  local paths = {}
+  local seen = {}
+  local function add(path)
+    if path and path ~= "" and not seen[path] then
+      seen[path] = true
+      paths[#paths + 1] = shell_quote(path)
+    end
+  end
+  add(file and file.old_path)
+  add(file and file.path)
+  return table.concat(paths, " ")
+end
+
+function M.discard_file(file, cwd)
+  if not file or file.section ~= "unstaged" then
+    return false, "Only unstaged files can be discarded"
+  end
+  local paths = file_pathspec(file)
+  if paths == "" then
+    return false, "No file under cursor"
+  end
+  local command = file.status == "?" and ("clean -f -- " .. paths) or ("restore --worktree -- " .. paths)
+  local _, err = result_or_error(run(command, cwd))
+  return err == nil, err
+end
+
+function M.restore_file_to_head(file, cwd)
+  if not file then
+    return false, "No file under cursor"
+  end
+  local paths = file_pathspec(file)
+  if paths == "" then
+    return false, "No file under cursor"
+  end
+  local command
+  if file.status == "?" then
+    command = "clean -f -- " .. paths
+  else
+    command = "restore --source=HEAD --staged --worktree -- " .. paths
+  end
+  local _, err = result_or_error(run(command, cwd))
+  return err == nil, err
+end
+
 local function build_hunk_patch(file, hunk)
   local old_path = file.old_header_path or ("a/" .. (file.old_path or file.path))
   local new_path = file.new_header_path or ("b/" .. file.path)
@@ -379,6 +424,18 @@ local function build_hunk_patch(file, hunk)
     lines[#lines + 1] = line
   end
   return table.concat(lines, "\n") .. "\n"
+end
+
+function M.discard_hunk(file, hunk, cwd)
+  if not file or file.section ~= "unstaged" then
+    return false, "Only unstaged hunks can be discarded"
+  end
+  if not hunk or not hunk.patch_lines then
+    return false, "No hunk under cursor"
+  end
+  local patch = build_hunk_patch(file, hunk)
+  local _, err = result_or_error(run("apply --reverse --unidiff-zero -", cwd, patch))
+  return err == nil, err
 end
 
 function M.stage_hunk(file, hunk, cwd)

@@ -18,6 +18,13 @@ local function temp_repo()
   return dir
 end
 
+local function read_file(path)
+  local handle = assert(io.open(path, "rb"))
+  local content = handle:read("*a")
+  handle:close()
+  return content
+end
+
 it("detects a git repository", function()
   local dir = temp_repo()
   local ok = git.is_repo(dir)
@@ -181,4 +188,92 @@ it("stages a hunk when diff header paths differ", function()
   local status = git.status(dir)
   assert_equal(status.staged[1].status, "R")
   assert_equal(status.staged[1].path, "new/a.txt")
+end)
+
+it("discards one unstaged hunk and preserves another", function()
+  local dir = temp_repo()
+  for index = 1, 12 do
+    run(string.format("printf 'line %d\\n' >> sample.txt", index), dir)
+  end
+  run("git add sample.txt", dir)
+  run("git commit -q -m initial", dir)
+  run("sed -i '1s/line 1/changed 1/;12s/line 12/changed 12/' sample.txt", dir)
+
+  local files = git.diff("unstaged", dir, 0)
+  assert_equal(#files[1].hunks, 2)
+  local ok, err = git.discard_hunk(files[1], files[1].hunks[1], dir)
+
+  assert_equal(ok, true)
+  assert_equal(err, nil)
+  local content = read_file(dir .. "/sample.txt")
+  assert_truthy(content:match("^line 1\n"))
+  assert_truthy(content:match("changed 12\n$"))
+end)
+
+it("discards an unstaged file back to the staged snapshot", function()
+  local dir = temp_repo()
+  run("printf 'head\n' > sample.txt", dir)
+  run("git add sample.txt", dir)
+  run("git commit -q -m initial", dir)
+  run("printf 'index\n' > sample.txt", dir)
+  run("git add sample.txt", dir)
+  run("printf 'worktree\n' > sample.txt", dir)
+
+  local file = git.status(dir).unstaged[1]
+  local ok, err = git.discard_file(file, dir)
+
+  assert_equal(ok, true)
+  assert_equal(err, nil)
+  assert_equal(read_file(dir .. "/sample.txt"), "index\n")
+  assert_equal(git.snapshot({ path = "sample.txt", section = "staged" }, "new", dir), "index\n")
+end)
+
+it("removes an untracked file when discarding it", function()
+  local dir = temp_repo()
+  run("git commit --allow-empty -q -m initial", dir)
+  run("printf 'temporary\n' > scratch.txt", dir)
+
+  local file = git.status(dir).unstaged[1]
+  local ok, err = git.discard_file(file, dir)
+
+  assert_equal(ok, true)
+  assert_equal(err, nil)
+  assert_equal(io.open(dir .. "/scratch.txt", "rb"), nil)
+end)
+
+it("restores staged and unstaged changes to HEAD", function()
+  local dir = temp_repo()
+  run("printf 'head\n' > sample.txt", dir)
+  run("git add sample.txt", dir)
+  run("git commit -q -m initial", dir)
+  run("printf 'index\n' > sample.txt", dir)
+  run("git add sample.txt", dir)
+  run("printf 'worktree\n' > sample.txt", dir)
+
+  local file = git.status(dir).unstaged[1]
+  local ok, err = git.restore_file_to_head(file, dir)
+
+  assert_equal(ok, true)
+  assert_equal(err, nil)
+  assert_equal(read_file(dir .. "/sample.txt"), "head\n")
+  local status = git.status(dir)
+  assert_equal(#status.staged, 0)
+  assert_equal(#status.unstaged, 0)
+end)
+
+it("removes a staged added file when restoring it to HEAD", function()
+  local dir = temp_repo()
+  run("git commit --allow-empty -q -m initial", dir)
+  run("printf 'new\n' > added.txt", dir)
+  run("git add added.txt", dir)
+
+  local file = git.status(dir).staged[1]
+  local ok, err = git.restore_file_to_head(file, dir)
+
+  assert_equal(ok, true)
+  assert_equal(err, nil)
+  assert_equal(io.open(dir .. "/added.txt", "rb"), nil)
+  local status = git.status(dir)
+  assert_equal(#status.staged, 0)
+  assert_equal(#status.unstaged, 0)
 end)

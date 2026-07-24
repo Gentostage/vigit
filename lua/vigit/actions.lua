@@ -221,6 +221,10 @@ function M.open_worktrees(session)
   require("vigit.worktree_picker").open(session)
 end
 
+function M.open_terminal(session)
+  return require("vigit.ui").open_terminal(session)
+end
+
 function M.add_review_comment(session, opts)
   require("vigit.review_ui").add_comment(session, opts)
 end
@@ -248,6 +252,70 @@ local function finish_index_change(session, ok, err)
     notify(err or "Git index operation failed", vim.log.levels.ERROR)
   end
   M.refresh(session)
+end
+
+local function confirm_change(prompt, label, callback)
+  vim.ui.select({ "Cancel", label }, { prompt = prompt }, function(choice)
+    if choice == label then
+      callback()
+    end
+  end)
+end
+
+function M.discard(session)
+  local buffer_name = current_buffer_name(session)
+  local line = current_line()
+  local meta = buffer_name == "diff" and session.state.diff_map and session.state.diff_map[line] or nil
+  if meta and meta.kind and meta.kind ~= "file_header" then
+    notify("Move to a changed line for a hunk, or to the file header for the whole file", vim.log.levels.WARN)
+    return
+  end
+  local target = buffer_name == "diff" and not (meta and meta.kind) and session.state:hunk_at_line(line) or nil
+  if target then
+    if target.file.section ~= "unstaged" then
+      notify("Unstage this hunk with s before discarding it", vim.log.levels.WARN)
+      return
+    end
+    confirm_change("Discard this hunk in " .. target.file.path .. "?", "Discard hunk", function()
+      finish_index_change(
+        session,
+        session.state.git.discard_hunk(target.file, target.hunk, session.state.cwd)
+      )
+    end)
+    return
+  end
+
+  local file = session.state:file_at_line(buffer_name, line)
+  if not file then
+    notify("No file under cursor", vim.log.levels.WARN)
+    return
+  end
+  if file.section ~= "unstaged" then
+    notify("Unstage this file with s before discarding it", vim.log.levels.WARN)
+    return
+  end
+  local prompt = file.status == "?"
+      and ("Delete untracked file " .. file.path .. "?")
+    or ("Discard unstaged changes in " .. file.path .. "?")
+  confirm_change(prompt, "Discard file", function()
+    finish_index_change(session, session.state.git.discard_file(file, session.state.cwd))
+  end)
+end
+
+function M.restore_file(session)
+  local buffer_name = current_buffer_name(session)
+  local file = session.state:file_at_line(buffer_name, current_line())
+  if not file then
+    notify("No file under cursor", vim.log.levels.WARN)
+    return
+  end
+  confirm_change(
+    "Restore " .. file.path .. " to HEAD? Staged and unstaged changes will be lost.",
+    "Restore file",
+    function()
+      finish_index_change(session, session.state.git.restore_file_to_head(file, session.state.cwd))
+    end
+  )
 end
 
 function M.stage(session)

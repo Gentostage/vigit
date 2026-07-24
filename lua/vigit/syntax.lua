@@ -112,7 +112,7 @@ local function symbol_name(node, source)
   return name ~= "" and name or nil
 end
 
-local function context_at(data, target_line)
+local function context_at(data, target_line, visible_lines)
   local source_row = math.max(math.min((tonumber(target_line) or 1) - 1, #data.lines - 1), 0)
   local line = data.lines[source_row + 1] or ""
   local first_nonblank = line:find("%S") or 1
@@ -128,7 +128,10 @@ local function context_at(data, target_line)
     if kind then
       local name = symbol_name(node, data.source)
       if name then
-        table.insert(symbols, 1, name .. (kind == "function" and "()" or ""))
+        local start_row = node:start()
+        if not visible_lines or not visible_lines[start_row + 1] then
+          table.insert(symbols, 1, name .. (kind == "function" and "()" or ""))
+        end
       end
     end
     node = node:parent()
@@ -178,8 +181,8 @@ local function load_snapshot(root, file, side)
     root = tree:root(),
     captures = collect_captures(source, lines, language, tree, query),
   }
-  data.context_at = function(target_line)
-    return context_at(data, target_line)
+  data.context_at = function(target_line, visible_lines)
+    return context_at(data, target_line, visible_lines)
   end
   cache[key] = { signature = current_signature, data = data }
   return data
@@ -189,21 +192,30 @@ function M.decorate(opts)
   prepare_provider()
   local handled_rows = {}
   local files = {}
+  for row in ipairs(opts.lines or {}) do
+    local meta = opts.diff_map and opts.diff_map[row] or nil
+    local file = meta and meta.file or nil
+    if file and file.path then
+      local key = tostring(file.section) .. ":" .. file.path
+      files[key] = files[key] or { visible_new_lines = {} }
+      if meta.new_line then
+        files[key].visible_new_lines[meta.new_line] = true
+      end
+    end
+  end
   for row, line in ipairs(opts.lines or {}) do
     local meta = opts.diff_map and opts.diff_map[row] or nil
     local file = meta and meta.file or nil
     if file and file.path then
       local key = tostring(file.section) .. ":" .. file.path
-      if files[key] == nil then
-        files[key] = {
-          old = load_snapshot(opts.root, file, "old") or false,
-          new = load_snapshot(opts.root, file, "new") or false,
-        }
-      end
       local snapshots = files[key]
+      if snapshots.old == nil then
+        snapshots.old = load_snapshot(opts.root, file, "old") or false
+        snapshots.new = load_snapshot(opts.root, file, "new") or false
+      end
       local new_data = snapshots.new or nil
       if new_data and meta.kind == "gap" then
-        local context = new_data.context_at(meta.target_line)
+        local context = new_data.context_at(meta.target_line, snapshots.visible_new_lines)
         if context and opts.add_gap_context then
           opts.add_gap_context(opts.buf, row, context)
         end

@@ -55,11 +55,17 @@ original[111] = "        return items"
 
 create_repo(repo_a, original)
 create_repo(repo_b, { "value = 1" })
+vim.fn.writefile(original, repo_a .. "/hidden.py")
+run(repo_a, { "git", "add", "hidden.py" })
+run(repo_a, { "git", "commit", "-qm", "add hidden fixture" })
 
 local changed = vim.deepcopy(original)
 changed[31] = "    async def execute(self, items):"
 changed[90] = "        selected_target = items[0] + 1"
 vim.fn.writefile(changed, repo_a .. "/sample.py")
+local hidden_changed = vim.deepcopy(original)
+hidden_changed[90] = "        hidden_target = items[0] + 1"
+vim.fn.writefile(hidden_changed, repo_a .. "/hidden.py")
 vim.fn.writefile({ "value = 2" }, repo_b .. "/sample.py")
 
 local treesitter_plugin = nil
@@ -194,28 +200,44 @@ test("changed lines use gutter bars instead of textual diff markers", function()
   assert(has_delete_sign, "removed line gutter marker is missing")
 end)
 
-syntax_test("collapsed context shows its enclosing class and function", function()
-  local row = assert(find_diff_row(session_a, function(_, meta)
-    return meta
-      and meta.kind == "gap"
-      and meta.target_line > 31
-      and meta.target_line < 90
-  end), "collapsed context between Python hunks was not rendered")
+local function gap_context(session, row)
   local marks = vim.api.nvim_buf_get_extmarks(
-    session_a.diff_buf,
+    session.diff_buf,
     -1,
     { row - 1, 0 },
     { row - 1, -1 },
     { details = true }
   )
-  local context = nil
   for _, mark in ipairs(marks) do
     local details = mark[4] or {}
     if details.virt_text and details.virt_text[1] and details.virt_text[1][2] == "VigitGapContext" then
-      context = details.virt_text[1][1]
-      break
+      return details.virt_text[1][1]
     end
   end
+  return nil
+end
+
+syntax_test("collapsed context omits visible class and function", function()
+  local row = assert(find_diff_row(session_a, function(_, meta)
+    return meta
+      and meta.kind == "gap"
+      and meta.file.path == "sample.py"
+      and meta.target_line > 31
+      and meta.target_line < 90
+  end), "collapsed context between Python hunks was not rendered")
+  local context = gap_context(session_a, row)
+  assert(context == nil, "visible enclosing symbols were repeated in the gap")
+end)
+
+syntax_test("collapsed context shows hidden class and function", function()
+  local row = assert(find_diff_row(session_a, function(_, meta)
+    return meta
+      and meta.kind == "gap"
+      and meta.file.path == "hidden.py"
+      and meta.target_line > 31
+      and meta.target_line < 90
+  end), "collapsed context before the Python hunk was not rendered")
+  local context = gap_context(session_a, row)
   assert(context and context:match("PaymentService%.execute%("), "enclosing symbol is missing from gap")
 end)
 
@@ -294,6 +316,22 @@ test("Q returns to the Vigit tab that opened the editor", function()
     vim.api.nvim_get_current_tabpage() == session_a.vigit_tab,
     "Q returned to a different worktree tab"
   )
+end)
+
+test("T opens a terminal in the active worktree and Q returns to Vigit", function()
+  vim.api.nvim_set_current_tabpage(session_a.vigit_tab)
+  assert(actions.open_terminal(session_a))
+  local terminal_buf = vim.api.nvim_get_current_buf()
+  assert(vim.bo[terminal_buf].buftype == "terminal", "T did not open a terminal buffer")
+  assert(vim.fn.getcwd() == repo_a, "terminal opened outside the active worktree")
+
+  local mapping
+  vim.api.nvim_buf_call(terminal_buf, function()
+    mapping = vim.fn.maparg("Q", "n", false, true)
+  end)
+  assert(mapping and type(mapping.callback) == "function", "terminal Q mapping is missing")
+  mapping.callback()
+  assert(vim.api.nvim_get_current_tabpage() == session_a.vigit_tab, "terminal Q returned to another tab")
 end)
 
 vim.fn.delete(temporary, "rf")

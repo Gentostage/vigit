@@ -42,6 +42,7 @@ local function open_vim_fixture()
     current_win = 100,
     lines_by_buf = {},
     keymaps = 0,
+    mappings = {},
     width = nil,
   }
   local buffer_options = setmetatable({}, {
@@ -69,9 +70,10 @@ local function open_vim_fixture()
       end
     end,
     keymap = {
-      set = function(_, _, rhs)
+      set = function(mode, lhs, rhs)
         assert_equal(type(rhs), "function")
         fixture.keymaps = fixture.keymaps + 1
+        fixture.mappings[mode .. ":" .. lhs] = true
       end,
     },
     api = {
@@ -191,7 +193,10 @@ it("open creates windows, buffers, and renders state lines", function()
     assert_equal(fixture.lines_by_buf[1][2], " M a.txt")
     assert_equal(fixture.lines_by_buf[2][2], "@@ a.txt")
     assert_equal(fixture.width, 33)
-    assert_equal(fixture.keymaps, 31)
+    assert_equal(fixture.keymaps, 37)
+    assert_equal(fixture.mappings["n:x"], true)
+    assert_equal(fixture.mappings["n:X"], true)
+    assert_equal(fixture.mappings["n:T"], true)
   end)
 
   reset_ui_modules()
@@ -317,6 +322,96 @@ it("focuses the first file header when returning to the overview", function()
     assert_equal(focused, true)
     assert_equal(focused_cursor[1], 4)
     assert_equal(focused_cursor[2], 0)
+  end)
+
+  reset_ui_modules()
+end)
+
+it("opens a terminal tab in the current worktree and returns with Q", function()
+  stub_ui_modules({ new = function() end })
+  local current_tab = 10
+  local terminal_tab_valid = true
+  local commands = {}
+  local normal_q = nil
+  local terminal_ctrl_q = nil
+  local terminal_close_registered = false
+
+  with_fake_vim({
+    log = { levels = { ERROR = 4 } },
+    notify = function() end,
+    schedule = function(callback)
+      callback()
+    end,
+    fn = {
+      fnameescape = function(path) return path end,
+    },
+    cmd = function(command)
+      commands[#commands + 1] = command
+      if command == "tabnew" then
+        current_tab = 20
+      elseif command == "tabclose" then
+        terminal_tab_valid = false
+        current_tab = 10
+      end
+    end,
+    keymap = {
+      set = function(mode, lhs, callback)
+        if mode == "n" and lhs == "Q" then
+          normal_q = callback
+        elseif mode == "t" and lhs == "<C-q>" then
+          terminal_ctrl_q = callback
+        end
+      end,
+    },
+    api = {
+      nvim_get_current_tabpage = function()
+        return current_tab
+      end,
+      nvim_get_current_buf = function()
+        return 3
+      end,
+      nvim_get_current_win = function()
+        return 30
+      end,
+      nvim_tabpage_is_valid = function(tab)
+        return tab == 10 or (tab == 20 and terminal_tab_valid)
+      end,
+      nvim_set_current_tabpage = function(tab)
+        current_tab = tab
+      end,
+      nvim_set_option_value = function(name, value, opts)
+        assert_equal(name, "winbar")
+        assert_truthy(value:match("VIGIT · TERMINAL"))
+        assert_equal(opts.win, 30)
+      end,
+      nvim_create_autocmd = function(event, opts)
+        assert_equal(event, "TermClose")
+        assert_equal(opts.buffer, 3)
+        terminal_close_registered = true
+        return 9
+      end,
+    },
+  }, function()
+    local ui = require("vigit.ui")
+    local opened = ui.open_terminal({
+      root = "/tmp/worktree",
+      worktree_name = "worktree",
+      vigit_tab = 10,
+      augroup = 7,
+    })
+
+    assert_equal(opened, true)
+    assert_equal(commands[1], "tabnew")
+    assert_equal(commands[2], "tcd /tmp/worktree")
+    assert_equal(commands[3], "terminal")
+    assert_equal(commands[4], "startinsert")
+    assert_truthy(normal_q)
+    assert_truthy(terminal_ctrl_q)
+    assert_equal(terminal_close_registered, true)
+
+    normal_q()
+    assert_equal(current_tab, 10)
+    assert_equal(commands[#commands], "tabclose")
   end)
 
   reset_ui_modules()

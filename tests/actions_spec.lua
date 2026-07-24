@@ -189,3 +189,224 @@ it("stages an unstaged hunk from the diff buffer", function()
 
   reset_actions()
 end)
+
+it("discards an unstaged hunk after confirmation", function()
+  reset_actions()
+  local discarded_hunk = nil
+  local refreshes = 0
+  package.loaded["vigit.ui"] = { render = function() end }
+
+  with_fake_vim({
+    api = {
+      nvim_get_current_buf = function() return 9 end,
+      nvim_win_get_cursor = function() return { 4, 0 } end,
+    },
+    ui = {
+      select = function(choices, opts, callback)
+        assert_equal(choices[2], "Discard hunk")
+        assert_truthy(opts.prompt:match("a%.txt"))
+        callback("Discard hunk")
+      end,
+    },
+    log = { levels = { ERROR = 4, INFO = 2, WARN = 3 } },
+    notify = function() end,
+  }, function()
+    local file = { path = "a.txt", section = "unstaged" }
+    local hunk = { header = "@@ -1 +1 @@" }
+    local actions = require("vigit.actions")
+    actions.discard({
+      changes_buf = 8,
+      diff_buf = 9,
+      state = {
+        cwd = "/tmp/repo",
+        hunk_at_line = function(_, line)
+          assert_equal(line, 4)
+          return { file = file, hunk = hunk }
+        end,
+        git = {
+          discard_hunk = function(actual_file, actual_hunk, cwd)
+            assert_equal(actual_file, file)
+            assert_equal(actual_hunk, hunk)
+            assert_equal(cwd, "/tmp/repo")
+            discarded_hunk = actual_hunk
+            return true, nil
+          end,
+        },
+        refresh = function()
+          refreshes = refreshes + 1
+          return true, nil
+        end,
+      },
+    })
+
+    assert_equal(discarded_hunk, hunk)
+    assert_equal(refreshes, 1)
+  end)
+
+  reset_actions()
+end)
+
+it("requires staged hunks to be unstaged before discarding", function()
+  reset_actions()
+  local warning = nil
+  local prompted = false
+
+  with_fake_vim({
+    api = {
+      nvim_get_current_buf = function() return 9 end,
+      nvim_win_get_cursor = function() return { 4, 0 } end,
+    },
+    ui = {
+      select = function()
+        prompted = true
+      end,
+    },
+    log = { levels = { ERROR = 4, INFO = 2, WARN = 3 } },
+    notify = function(message)
+      warning = message
+    end,
+  }, function()
+    local actions = require("vigit.actions")
+    actions.discard({
+      changes_buf = 8,
+      diff_buf = 9,
+      state = {
+        hunk_at_line = function()
+          return {
+            file = { path = "a.txt", section = "staged" },
+            hunk = { header = "@@ -1 +1 @@" },
+          }
+        end,
+      },
+    })
+
+    assert_equal(prompted, false)
+    assert_truthy(warning:match("Unstage"))
+  end)
+
+  reset_actions()
+end)
+
+it("does not discard an implicit hunk from a collapsed gap", function()
+  reset_actions()
+  local warning = nil
+  local prompted = false
+
+  with_fake_vim({
+    api = {
+      nvim_get_current_buf = function() return 9 end,
+      nvim_win_get_cursor = function() return { 4, 0 } end,
+    },
+    ui = {
+      select = function()
+        prompted = true
+      end,
+    },
+    log = { levels = { ERROR = 4, INFO = 2, WARN = 3 } },
+    notify = function(message)
+      warning = message
+    end,
+  }, function()
+    local actions = require("vigit.actions")
+    actions.discard({
+      changes_buf = 8,
+      diff_buf = 9,
+      state = {
+        diff_map = {
+          [4] = {
+            kind = "gap",
+            file = { path = "a.txt", section = "unstaged" },
+          },
+        },
+        hunk_at_line = function()
+          error("gap must not resolve to a hunk")
+        end,
+        file_at_line = function()
+          error("gap must not resolve to a whole-file discard")
+        end,
+      },
+    })
+
+    assert_equal(prompted, false)
+    assert_truthy(warning:match("changed line"))
+  end)
+
+  reset_actions()
+end)
+
+it("restores a whole file to HEAD after confirmation", function()
+  reset_actions()
+  local restored_file = nil
+  local refreshes = 0
+  package.loaded["vigit.ui"] = { render = function() end }
+
+  with_fake_vim({
+    api = {
+      nvim_get_current_buf = function() return 5 end,
+      nvim_win_get_cursor = function() return { 2, 0 } end,
+    },
+    ui = {
+      select = function(choices, opts, callback)
+        assert_equal(choices[2], "Restore file")
+        assert_truthy(opts.prompt:match("a%.txt"))
+        callback("Restore file")
+      end,
+    },
+    log = { levels = { ERROR = 4, INFO = 2, WARN = 3 } },
+    notify = function() end,
+  }, function()
+    local file = { path = "a.txt", section = "staged" }
+    local actions = require("vigit.actions")
+    actions.restore_file({
+      changes_buf = 5,
+      diff_buf = 6,
+      state = {
+        cwd = "/tmp/repo",
+        file_at_line = function(_, buffer_name, line)
+          assert_equal(buffer_name, "changes")
+          assert_equal(line, 2)
+          return file
+        end,
+        git = {
+          restore_file_to_head = function(actual_file, cwd)
+            assert_equal(actual_file, file)
+            assert_equal(cwd, "/tmp/repo")
+            restored_file = actual_file
+            return true, nil
+          end,
+        },
+        refresh = function()
+          refreshes = refreshes + 1
+          return true, nil
+        end,
+      },
+    })
+
+    assert_equal(restored_file, file)
+    assert_equal(refreshes, 1)
+  end)
+
+  reset_actions()
+end)
+
+it("opens a terminal for the active Vigit session", function()
+  reset_actions()
+  local opened_session = nil
+  package.loaded["vigit.ui"] = {
+    open_terminal = function(session)
+      opened_session = session
+      return true
+    end,
+  }
+
+  with_fake_vim({}, function()
+    local actions = require("vigit.actions")
+    local session = { root = "/tmp/worktree" }
+    local opened = actions.open_terminal(session)
+
+    assert_equal(opened, true)
+    assert_equal(opened_session, session)
+  end)
+
+  reset_actions()
+end)
