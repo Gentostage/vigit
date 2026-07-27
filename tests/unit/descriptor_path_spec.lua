@@ -68,12 +68,21 @@ end)
 
 it("resizes Windows path buffers and preserves the exact handle", function()
   local sizes = {}
-  local descriptor = {}
+  local descriptor = 61
+  local handle = {}
+  local conversions = 0
   local result = verify({
     platform = "Windows_NT",
-    windows = {
-      get_final_path = function(opened_descriptor, buffer_size)
+    windows_handle = {
+      to_handle = function(opened_descriptor)
+        conversions = conversions + 1
         assert_equal(opened_descriptor, descriptor)
+        return handle
+      end,
+    },
+    windows = {
+      get_final_path = function(opened_handle, buffer_size)
+        assert_equal(opened_handle, handle)
         sizes[#sizes + 1] = buffer_size
         if #sizes == 1 then
           return { required = 640 }
@@ -83,6 +92,7 @@ it("resizes Windows path buffers and preserves the exact handle", function()
     },
   }, descriptor, [[c:\repo]])
 
+  assert_equal(conversions, 1)
   assert_equal(sizes, { 260, 640 })
   assert_equal(result.value, "c:/repo/dir/file.lua")
 end)
@@ -90,6 +100,11 @@ end)
 it("normalizes extended Windows UNC paths", function()
   local result = verify({
     platform = "Windows_NT",
+    windows_handle = {
+      to_handle = function(descriptor)
+        return descriptor
+      end,
+    },
     windows = {
       get_final_path = function()
         return { path = [[\\?\UNC\Server\Share\Repo\File.lua]] }
@@ -103,6 +118,11 @@ end)
 it("rejects Windows sibling prefixes case-insensitively", function()
   local result = verify({
     platform = "Windows_NT",
+    windows_handle = {
+      to_handle = function(descriptor)
+        return descriptor
+      end,
+    },
     windows = {
       get_final_path = function()
         return { path = [[\\?\C:\Repository\secret.txt]] }
@@ -114,9 +134,44 @@ it("rejects Windows sibling prefixes case-insensitively", function()
   assert_equal(result.error.code, "unsafe_path")
 end)
 
+it("fails before Windows path lookup when descriptor conversion fails", function()
+  local conversions = 0
+  local path_lookups = 0
+  local result = verify({
+    platform = "Windows_NT",
+    windows_handle = {
+      to_handle = function(descriptor)
+        conversions = conversions + 1
+        assert_equal(descriptor, 73)
+        return -1, "uv_get_osfhandle returned INVALID_HANDLE_VALUE"
+      end,
+    },
+    windows = {
+      get_final_path = function()
+        path_lookups = path_lookups + 1
+        return { path = [[\\?\C:\repo\secret.txt]] }
+      end,
+    },
+  }, 73, [[C:\repo]])
+
+  assert_equal(conversions, 1)
+  assert_equal(path_lookups, 0)
+  assert_equal(result.ok, false)
+  assert_equal(result.error.code, "descriptor_path_unavailable")
+  assert_equal(
+    result.error.details,
+    "uv_get_osfhandle returned INVALID_HANDLE_VALUE"
+  )
+end)
+
 it("fails closed when Windows descriptor resolution fails", function()
   local result = verify({
     platform = "Windows_NT",
+    windows_handle = {
+      to_handle = function(descriptor)
+        return descriptor
+      end,
+    },
     windows = {
       get_final_path = function()
         return nil, "GetFinalPathNameByHandleW failed"

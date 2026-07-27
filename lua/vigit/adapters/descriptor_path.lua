@@ -12,6 +12,7 @@ local WINDOWS_MAX_BUFFER_SIZE = 65536
 
 local darwin_backend
 local windows_backend
+local windows_handle_converter
 
 local function unavailable(details)
   return Result.err(
@@ -241,6 +242,55 @@ local function load_windows_backend()
   return windows_backend
 end
 
+local function load_windows_handle_converter()
+  if windows_handle_converter then
+    return windows_handle_converter
+  end
+
+  local loaded, ffi = pcall(require, "ffi")
+  if not loaded then
+    return nil, "LuaJIT FFI is unavailable: " .. tostring(ffi)
+  end
+  local declared, declaration_error = pcall(ffi.cdef, [[
+    void *uv_get_osfhandle(int descriptor);
+    intptr_t _get_osfhandle(int descriptor);
+  ]])
+  if not declared then
+    return nil, "file handle declarations failed: " .. tostring(declaration_error)
+  end
+
+  local function bind(symbol)
+    local bound, callable = pcall(function()
+      return ffi.C[symbol]
+    end)
+    return bound and callable or nil
+  end
+
+  local operation = "uv_get_osfhandle"
+  local convert = bind(operation)
+  if not convert then
+    -- ffi.C selects the CRT linked with LuaJIT instead of guessing between
+    -- ucrtbase and msvcrt descriptor tables.
+    operation = "_get_osfhandle"
+    convert = bind(operation)
+  end
+  if not convert then
+    return nil, "uv_get_osfhandle and linked CRT _get_osfhandle are unavailable"
+  end
+
+  windows_handle_converter = {
+    operation = operation,
+    to_handle = function(descriptor)
+      return convert(descriptor)
+    end,
+    is_invalid = function(handle)
+      local cast, integer_handle = pcall(ffi.cast, "intptr_t", handle)
+      return not cast or integer_handle == -1 or integer_handle == -2
+    end,
+  }
+  return windows_handle_converter
+end
+
 local function verify_linux(self, descriptor, root, callback)
   if not self.uv or type(self.uv.fs_realpath) ~= "function" then
     callback(unavailable("libuv realpath is unavailable"))
@@ -294,6 +344,45 @@ local function verify_darwin(self, descriptor, root, callback)
 end
 
 local function verify_windows(self, descriptor, root, callback)
+  local converter, converter_error
+  if self.windows_handle then
+    converter = self.windows_handle
+  else
+    converter, converter_error = load_windows_handle_converter()
+  end
+  if not converter then
+    callback(unavailable(converter_error))
+    return
+  end
+
+  local converted, handle, conversion_error = pcall(
+    converter.to_handle,
+    descriptor
+  )
+  if not converted then
+    callback(unavailable(handle))
+    return
+  end
+
+  local invalid_handle = handle == nil or handle == -1 or handle == -2
+  if not invalid_handle and type(converter.is_invalid) == "function" then
+    local checked, invalid = pcall(converter.is_invalid, handle)
+    if not checked then
+      conversion_error = invalid
+      invalid_handle = true
+    else
+      invalid_handle = invalid == true
+    end
+  end
+  if invalid_handle then
+    callback(unavailable(
+      conversion_error
+        or (converter.operation or "file descriptor conversion")
+          .. " returned INVALID_HANDLE_VALUE"
+    ))
+    return
+  end
+
   local backend, backend_error
   if self.windows then
     backend = self.windows
@@ -309,7 +398,7 @@ local function verify_windows(self, descriptor, root, callback)
   for _ = 1, 8 do
     local called, response, resolution_error = pcall(
       backend.get_final_path,
-      descriptor,
+      handle,
       buffer_size
     )
     if not called then
@@ -347,6 +436,7 @@ function M.new(options)
     uv = options.uv or default_uv,
     darwin = options.darwin,
     windows = options.windows,
+    windows_handle = options.windows_handle,
   }, Resolver)
 end
 
