@@ -230,22 +230,39 @@ local function dispose(session)
 end
 
 function M.abandon(session)
-  dispose(session)
+  return dispose(session)
 end
 
 function M.close(session)
-  if not dispose(session) then
-    return
+  if session.closed then
+    return false
   end
 
   if session.owned.tab and vim.api.nvim_tabpage_is_valid(session.owned.tab) then
     local current = vim.api.nvim_get_current_tabpage()
+    local neutral_tab
+    if #vim.api.nvim_list_tabpages() == 1 then
+      vim.cmd("tabnew")
+      neutral_tab = vim.api.nvim_get_current_tabpage()
+    end
     vim.api.nvim_set_current_tabpage(session.owned.tab)
-    vim.cmd("tabclose")
+    local ok, message = pcall(vim.cmd, "tabclose")
+    if not ok then
+      if neutral_tab and vim.api.nvim_tabpage_is_valid(neutral_tab) then
+        vim.api.nvim_set_current_tabpage(neutral_tab)
+        pcall(vim.cmd, "tabclose")
+      end
+      if session.owned.tab and vim.api.nvim_tabpage_is_valid(session.owned.tab) then
+        vim.api.nvim_set_current_tabpage(session.owned.tab)
+      end
+      error(message, 0)
+    end
     if current ~= session.owned.tab and vim.api.nvim_tabpage_is_valid(current) then
       vim.api.nvim_set_current_tabpage(current)
     end
   end
+  dispose(session)
+  return true
 end
 
 return M

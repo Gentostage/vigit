@@ -192,6 +192,58 @@ it("closes the remaining owned tab when either owned buffer is wiped directly", 
   end
 end)
 
+it("closes the last owned tab with q and cancels reads before disposal", function()
+  local repo = Fixture.new()
+  local session
+  local reopened
+  local owned_tab
+  local cancelled = 0
+  local ok, message = xpcall(function()
+    session = assert(v2.open({ cwd = repo.root }))
+    assert_truthy(vim.wait(2000, function()
+      return session.busy.status == nil
+    end, 10))
+    vim.api.nvim_set_current_tabpage(session.owned.tab)
+    vim.cmd("tabonly")
+    owned_tab = session.owned.tab
+    session.reads.jobs.probe = {
+      handle = {
+        cancel = function()
+          cancelled = cancelled + 1
+        end,
+      },
+    }
+
+    vim.api.nvim_set_current_win(session.owned.diff_win)
+    vim.api.nvim_feedkeys("q", "x", false)
+
+    assert_truthy(vim.wait(1000, function()
+      return session.closed
+        and not vim.api.nvim_tabpage_is_valid(owned_tab)
+    end, 10))
+    assert_equal(cancelled, 1)
+    assert_equal(#vim.api.nvim_list_tabpages(), 1)
+    assert_truthy(vim.api.nvim_get_current_tabpage() ~= owned_tab)
+
+    reopened = assert(v2.open({ cwd = repo.root }))
+    assert_truthy(reopened.id ~= session.id)
+  end, debug.traceback)
+
+  if owned_tab and vim.api.nvim_tabpage_is_valid(owned_tab) then
+    if #vim.api.nvim_list_tabpages() == 1 then
+      vim.cmd("tabnew")
+    end
+    vim.api.nvim_set_current_tabpage(owned_tab)
+    pcall(vim.cmd, "tabclose")
+  end
+  close_session(reopened)
+  close_session(session)
+  repo:cleanup()
+  if not ok then
+    error(message, 0)
+  end
+end)
+
 it("rolls back partial layout resources before returning an open error", function()
   local repo = Fixture.new()
   local reopened
@@ -300,6 +352,38 @@ it("loads all diffs when all-files is selected before initial status completes",
         and session.data.diffs["unstaged\0tracked.lua"] ~= nil
         and session.data.diffs["unstaged\0tracked.lua"] ~= first_diff
     end, 10))
+  end, debug.traceback)
+
+  close_session(session)
+  repo:cleanup()
+  if not ok then
+    error(message, 0)
+  end
+end)
+
+it("clears a stale branch after a successful detached status refresh", function()
+  local repo = Fixture.new()
+  local session
+  local ok, message = xpcall(function()
+    repo:write("tracked.lua", { "return true" })
+    repo:git({ "add", "--", "tracked.lua" })
+    repo:commit("initial")
+
+    session = assert(v2.open({ cwd = repo.root }))
+    assert_truthy(vim.wait(2000, function()
+      return session.data.status ~= nil and session.busy.status == nil
+    end, 10))
+    assert_truthy(session.branch ~= nil)
+
+    repo:git({ "checkout", "--detach", "-q" })
+    local generation = session.reads.generation
+    controller.dispatch(session, "refresh")
+    assert_truthy(vim.wait(2000, function()
+      return session.reads.generation > generation
+        and session.busy.status == nil
+    end, 10))
+    assert_equal(session.data.status.branch.head, nil)
+    assert_equal(session.branch, nil)
   end, debug.traceback)
 
   close_session(session)
@@ -693,21 +777,81 @@ it("publishes the basic normal-mode key registry", function()
   end
 end)
 
-it("registers VigitV2 without replacing the legacy Vigit command", function()
+it("validates setup options and registers commands only once", function()
   local repo = Fixture.new()
   local session
+  local config = require("vigit.config")
+  local command_calls = {}
+  local original_create_user_command = vim.api.nvim_create_user_command
   local ok, message = xpcall(function()
-    require("vigit").setup()
+    vim.api.nvim_create_user_command = function(name, callback, opts)
+      command_calls[name] = (command_calls[name] or 0) + 1
+      return original_create_user_command(name, callback, opts)
+    end
+
+    local plugin = require("vigit")
+    local invalid, invalid_error = plugin.setup({
+      ui = { changes_width = "wide" },
+    })
+    assert_equal(invalid, nil)
+    assert_equal(invalid_error.code, "invalid_config")
+    assert_equal(next(command_calls), nil)
+
+    local configured, setup_error = plugin.setup({
+      ui = { changes_width = 28 },
+    })
+    assert_equal(configured, true)
+    assert_equal(setup_error, nil)
+    assert_equal(config.get().ui.changes_width, 28)
+
+    assert_equal(plugin.setup({ ui = { changes_width = 30 } }), true)
+    assert_equal(config.get().ui.changes_width, 30)
+    assert_equal(command_calls.Vigit, 1)
+    assert_equal(command_calls.VigitV2, 1)
     assert_equal(vim.fn.exists(":Vigit"), 2)
     assert_equal(vim.fn.exists(":VigitV2"), 2)
 
     vim.cmd("VigitV2 " .. vim.fn.fnameescape(repo.root))
     session = assert(v2.open({ cwd = repo.root }))
     assert_equal(vim.api.nvim_get_current_tabpage(), session.owned.tab)
+    if vim.o.columns >= 80 then
+      assert_equal(vim.api.nvim_win_get_width(session.owned.changes_win), 30)
+    end
   end, debug.traceback)
 
+  vim.api.nvim_create_user_command = original_create_user_command
+  config.setup(nil)
   close_session(session)
   repo:cleanup()
+  if not ok then
+    error(message, 0)
+  end
+end)
+
+it("notifies a typed VigitV2 command error outside a repository", function()
+  local nonrepo = vim.fn.tempname()
+  local notifications = {}
+  local original_notify = vim.notify
+  vim.fn.mkdir(nonrepo, "p")
+  local ok, message = xpcall(function()
+    vim.notify = function(text, level, opts)
+      notifications[#notifications + 1] = {
+        text = text,
+        level = level,
+        opts = opts,
+      }
+    end
+
+    vim.cmd("VigitV2 " .. vim.fn.fnameescape(nonrepo))
+
+    assert_equal(#notifications, 1)
+    assert_truthy(notifications[1].text:find("not_repository", 1, true))
+    assert_equal(notifications[1].level, vim.log.levels.ERROR)
+    assert_equal(notifications[1].opts.title, "Vigit")
+  end, debug.traceback)
+
+  vim.notify = original_notify
+  vim.fn.delete(nonrepo, "rf")
   if not ok then
     error(message, 0)
   end

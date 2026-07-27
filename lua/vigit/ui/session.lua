@@ -40,6 +40,10 @@ function M.new(opts)
       queue = {},
     },
     busy = {},
+    errors = {
+      status = nil,
+      diffs = {},
+    },
     error = nil,
     closed = false,
   }

@@ -14,6 +14,15 @@ local function async_result(callback, result)
   return { cancel = function() end }
 end
 
+local function same_file(original, opened)
+  return original.type == "file"
+    and opened.type == "file"
+    and original.dev ~= nil
+    and original.ino ~= nil
+    and opened.dev == original.dev
+    and opened.ino == original.ino
+end
+
 local function read_file(path, callback)
   local cancelled = false
 
@@ -73,13 +82,37 @@ local function read_file(path, callback)
         return
       end
 
-      vim.uv.fs_read(descriptor, stat.size, 0, function(read_error, data)
-        vim.uv.fs_close(descriptor)
-        if read_error then
-          complete(Result.err("file_read_failed", "Unable to read file", read_error))
-        else
-          complete(Result.ok(data or ""))
+      vim.uv.fs_fstat(descriptor, function(fstat_error, opened_stat)
+        if cancelled then
+          vim.uv.fs_close(descriptor)
+          return
         end
+        if fstat_error then
+          vim.uv.fs_close(descriptor)
+          complete(Result.err(
+            "file_read_failed",
+            "Unable to inspect opened file",
+            fstat_error
+          ))
+          return
+        end
+        if not same_file(stat, opened_stat) then
+          vim.uv.fs_close(descriptor)
+          complete(Result.err(
+            "file_changed",
+            "File changed while it was being opened"
+          ))
+          return
+        end
+
+        vim.uv.fs_read(descriptor, opened_stat.size, 0, function(read_error, data)
+          vim.uv.fs_close(descriptor)
+          if read_error then
+            complete(Result.err("file_read_failed", "Unable to read file", read_error))
+          else
+            complete(Result.ok(data or ""))
+          end
+        end)
       end)
     end)
   end)
@@ -87,6 +120,122 @@ local function read_file(path, callback)
   return {
     cancel = function()
       cancelled = true
+    end,
+  }
+end
+
+local function path_error(path, reason)
+  return Result.err(
+    "unsafe_path",
+    "Unsafe repository-relative path",
+    tostring(path) .. ": " .. reason
+  )
+end
+
+local function validate_relative_path(path)
+  if type(path) ~= "string" or path == "" then
+    return path_error(path, "path is empty")
+  end
+  if path:find("\0", 1, true) then
+    return path_error(path, "path contains NUL")
+  end
+  if path:match("^[/\\]") or path:match("^%a:") then
+    return path_error(path, "path is absolute")
+  end
+  if path:match("[/\\]$") or path:match("[/\\][/\\]") then
+    return path_error(path, "path contains an empty component")
+  end
+
+  local count = 0
+  for component in path:gmatch("[^/\\]+") do
+    count = count + 1
+    if component == "." or component == ".." then
+      return path_error(path, "path contains a traversal component")
+    end
+  end
+  if count == 0 then
+    return path_error(path, "path has no components")
+  end
+  return nil
+end
+
+local function normalized_path(path)
+  return path:gsub("\\", "/"):gsub("/+$", "")
+end
+
+local function is_within(root, candidate)
+  root = normalized_path(root)
+  candidate = normalized_path(candidate)
+  return candidate == root
+    or candidate:sub(1, #root + 1) == root .. "/"
+end
+
+local function resolve_repository_path(root, path, callback)
+  local function complete(result)
+    vim.schedule(function()
+      callback(result)
+    end)
+  end
+
+  local invalid = validate_relative_path(path)
+  if invalid then
+    complete(invalid)
+    return
+  end
+
+  vim.uv.fs_realpath(root, function(root_error, canonical_root)
+    if root_error or not canonical_root then
+      complete(Result.err(
+        "unsafe_path",
+        "Repository root cannot be canonicalized",
+        root_error or root
+      ))
+      return
+    end
+
+    local parent = path:match("^(.*)[/\\][^/\\]+$") or ""
+    local leaf = path:match("([^/\\]+)$")
+    local parent_path = parent == "" and canonical_root
+      or canonical_root .. "/" .. parent
+    vim.uv.fs_realpath(parent_path, function(parent_error, canonical_parent)
+      if parent_error or not canonical_parent then
+        complete(path_error(path, parent_error or "parent cannot be canonicalized"))
+        return
+      end
+      if not is_within(canonical_root, canonical_parent) then
+        complete(path_error(path, "canonical parent escapes repository root"))
+        return
+      end
+      complete(Result.ok(canonical_parent .. "/" .. leaf))
+    end)
+  end)
+end
+
+local function read_repository_file(reader, root, path, callback)
+  local cancelled = false
+  local read_handle
+
+  resolve_repository_path(root, path, function(path_result)
+    if cancelled then
+      return
+    end
+    if not path_result.ok then
+      callback(path_result)
+      return
+    end
+    read_handle = reader(path_result.value, function(result)
+      if not cancelled then
+        callback(result)
+      end
+    end)
+  end)
+
+  return {
+    cancel = function()
+      cancelled = true
+      if type(read_handle) == "table" and type(read_handle.cancel) == "function" then
+        pcall(read_handle.cancel)
+      end
     end,
   }
 end
@@ -203,7 +352,7 @@ end
 
 function Git:diff(root, change, context, max_bytes, callback)
   if change.status == "?" then
-    return self.read_file(root .. "/" .. change.path, function(result)
+    return read_repository_file(self.read_file, root, change.path, function(result)
       if not result.ok then
         callback(git_error("diff", result))
         return
@@ -268,7 +417,7 @@ function Git:snapshot(root, change, side, callback)
   end
 
   if change.section == "unstaged" and side == "new" then
-    return self.read_file(root .. "/" .. change.path, function(result)
+    return read_repository_file(self.read_file, root, change.path, function(result)
       if not result.ok then
         callback(git_error("snapshot", result))
         return

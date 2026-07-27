@@ -59,7 +59,9 @@ changes = Changes.new({
   git = git,
   on_change = function(session)
     local status = session.data.status
-    session.branch = status and status.branch and status.branch.head or session.branch
+    if status and not session.busy.status then
+      session.branch = status.branch and status.branch.head or nil
+    end
     renderer.render(session)
     reconcile_all_files(session)
   end,

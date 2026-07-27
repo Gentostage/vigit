@@ -19,14 +19,52 @@ local function change_for(status, change_id)
   return nil
 end
 
+local function cancel_job(job)
+  local handle = job and (job.handle or job)
+  if type(handle) == "table" and type(handle.cancel) == "function" then
+    pcall(handle.cancel)
+  end
+end
+
+local function ensure_errors(session)
+  session.errors = session.errors or {}
+  session.errors.diffs = session.errors.diffs or {}
+  return session.errors
+end
+
+local function expose_error(session)
+  local errors = ensure_errors(session)
+  if errors.status then
+    session.error = errors.status
+    return
+  end
+
+  local selected = session.view.selected_change_id
+  if selected and errors.diffs[selected] then
+    session.error = errors.diffs[selected]
+    return
+  end
+
+  local first_id
+  for change_id in pairs(errors.diffs) do
+    if not first_id or change_id < first_id then
+      first_id = change_id
+    end
+  end
+  session.error = first_id and errors.diffs[first_id] or nil
+end
+
 local function clear_pending_diffs(session)
   session.busy.diff = {}
   session.view.all_files.loading = {}
+  ensure_errors(session).diffs = {}
   for key in pairs(session.reads.jobs) do
     if key:sub(1, 5) == "diff:" then
+      cancel_job(session.reads.jobs[key])
       session.reads.jobs[key] = nil
     end
   end
+  expose_error(session)
 end
 
 function M.new(opts)
@@ -56,10 +94,13 @@ function Changes:load_diff(session, change_id, generation)
 
   generation = generation or session.reads.generation
   local job_key = "diff:" .. change_id
+  cancel_job(session.reads.jobs[job_key])
   local request = {}
   session.busy.diff = session.busy.diff or {}
   session.busy.diff[change_id] = true
   session.view.all_files.loading[change_id] = true
+  ensure_errors(session).diffs[change_id] = nil
+  expose_error(session)
   session.reads.jobs[job_key] = request
   self:notify(session)
 
@@ -80,10 +121,11 @@ function Changes:load_diff(session, change_id, generation)
       if result.ok then
         session.data.diffs[change_id] = result.value
         session.view.all_files.loaded[change_id] = true
-        session.error = nil
+        ensure_errors(session).diffs[change_id] = nil
       else
-        session.error = result.error
+        ensure_errors(session).diffs[change_id] = result.error
       end
+      expose_error(session)
       self:notify(session)
     end
   )
@@ -97,24 +139,31 @@ function Changes:refresh(session)
     return
   end
 
+  cancel_job(session.reads.jobs.status)
+  session.reads.jobs.status = nil
   clear_pending_diffs(session)
   session.reads.generation = session.reads.generation + 1
   local generation = session.reads.generation
+  local request = {}
   session.busy.status = true
+  session.reads.jobs.status = request
   self:notify(session)
 
-  session.reads.jobs.status = self.git:status(session.root, function(result)
-    if not self:current(session, generation) then
+  local handle = self.git:status(session.root, function(result)
+    if not self:current(session, generation)
+        or session.reads.jobs.status ~= request then
       return
     end
 
+    session.reads.jobs.status = nil
     session.busy.status = nil
     if result.ok then
       session.data.status = result.value
       session.data.diffs = {}
       session.view.all_files.loaded = {}
       session.view.all_files.loading = {}
-      session.error = nil
+      ensure_errors(session).status = nil
+      expose_error(session)
       local selected_change_id = session.view.selected_change_id
       if selected_change_id and change_for(session.data.status, selected_change_id) then
         self:load_diff(session, selected_change_id, generation)
@@ -123,10 +172,14 @@ function Changes:refresh(session)
         self:notify(session)
       end
     else
-      session.error = result.error
+      ensure_errors(session).status = result.error
+      expose_error(session)
       self:notify(session)
     end
   end)
+  if session.reads.jobs.status == request then
+    request.handle = handle
+  end
 end
 
 function Changes:select(session, change_id)

@@ -5,13 +5,20 @@ local Session = require("vigit.ui.session")
 local function fake_git()
   local fake = {
     status_callbacks = {},
+    status_handles = {},
     diff_callbacks = {},
     diff_calls = {},
+    diff_handles = {},
   }
 
   function fake:status(_, callback)
     self.status_callbacks[#self.status_callbacks + 1] = callback
-    return {}
+    local handle = { cancelled = 0 }
+    handle.cancel = function()
+      handle.cancelled = handle.cancelled + 1
+    end
+    self.status_handles[#self.status_handles + 1] = handle
+    return handle
   end
 
   function fake:diff(_, change, context, max_bytes, callback)
@@ -21,7 +28,12 @@ local function fake_git()
       max_bytes = max_bytes,
     }
     self.diff_callbacks[#self.diff_callbacks + 1] = callback
-    return {}
+    local handle = { cancelled = 0 }
+    handle.cancel = function()
+      handle.cancelled = handle.cancelled + 1
+    end
+    self.diff_handles[#self.diff_handles + 1] = handle
+    return handle
   end
 
   return fake
@@ -197,4 +209,79 @@ it("уведомляет UI и очищает selection, исчезнувший 
 
   assert_equal(session.view.selected_change_id, nil)
   assert_equal(changed, 1)
+end)
+
+it("не очищает ошибку первого diff при более позднем успехе второго", function()
+  local fake = fake_git()
+  local changes = Changes.new({ git = fake })
+  local session = Session.new({ id = "a", root = "/repo" })
+  local first = change("unstaged\0src/a.lua")
+  local second = {
+    id = "unstaged\0src/b.lua",
+    section = "unstaged",
+    status = "M",
+    path = "src/b.lua",
+  }
+  session.data.status = {
+    branch = {},
+    staged = {},
+    unstaged = { first, second },
+  }
+
+  changes:load_all_visible(session, { first.id, second.id })
+  fake.diff_callbacks[1](Result.err("git_diff_failed", "First diff failed"))
+  fake.diff_callbacks[2](Result.ok({ id = second.id }))
+
+  assert_equal(session.error.code, "git_diff_failed")
+  assert_equal(session.error.message, "First diff failed")
+  assert_equal(session.errors.diffs[first.id], session.error)
+  assert_equal(session.errors.diffs[second.id], nil)
+end)
+
+it("показывает ту же ошибку независимо от обратного порядка diff callbacks", function()
+  local fake = fake_git()
+  local changes = Changes.new({ git = fake })
+  local session = Session.new({ id = "a", root = "/repo" })
+  local first = change("unstaged\0src/a.lua")
+  local second = {
+    id = "unstaged\0src/b.lua",
+    section = "unstaged",
+    status = "M",
+    path = "src/b.lua",
+  }
+  session.data.status = {
+    branch = {},
+    staged = {},
+    unstaged = { first, second },
+  }
+
+  changes:load_all_visible(session, { first.id, second.id })
+  fake.diff_callbacks[2](Result.ok({ id = second.id }))
+  fake.diff_callbacks[1](Result.err("git_diff_failed", "First diff failed"))
+
+  assert_equal(session.error.code, "git_diff_failed")
+  assert_equal(session.error.message, "First diff failed")
+  assert_equal(session.errors.diffs[first.id], session.error)
+  assert_equal(session.errors.diffs[second.id], nil)
+end)
+
+it("отменяет заменённые status и diff reads до перезаписи handles", function()
+  local fake = fake_git()
+  local changes = Changes.new({ git = fake })
+  local session = Session.new({ id = "a", root = "/repo" })
+  local selected = change("unstaged\0src/a.lua")
+  session.data.status = status(selected)
+
+  changes:refresh(session)
+  changes:refresh(session)
+  assert_equal(fake.status_handles[1].cancelled, 1)
+
+  fake.status_callbacks[2](Result.ok(status(selected)))
+  changes:select(session, selected.id)
+  changes:select(session, selected.id)
+  assert_equal(fake.diff_handles[1].cancelled, 1)
+
+  changes:refresh(session)
+  assert_equal(fake.diff_handles[2].cancelled, 1)
+  assert_equal(fake.status_handles[2].cancelled, 0)
 end)

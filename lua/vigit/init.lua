@@ -1,6 +1,17 @@
-local M = {}
+local config = require("vigit.config")
 
-function M.setup()
+local M = {}
+local commands_registered = false
+
+function M.setup(opts)
+  local configured = config.setup(opts)
+  if not configured.ok then
+    return nil, configured.error
+  end
+  if commands_registered then
+    return true
+  end
+
   local function open_comments()
     local session = require("vigit.ui").active_session()
     if session then
@@ -14,7 +25,16 @@ function M.setup()
     require("vigit.ui").open()
   end, { force = true, desc = "Open Vigit for the current worktree" })
   vim.api.nvim_create_user_command("VigitV2", function(opts)
-    require("vigit.v2").open({ cwd = opts.args ~= "" and opts.args or nil })
+    local _, open_error = require("vigit.v2").open({
+      cwd = opts.args ~= "" and opts.args or nil,
+    })
+    if open_error then
+      vim.notify(
+        string.format("[%s] %s", open_error.code, open_error.message),
+        vim.log.levels.ERROR,
+        { title = "Vigit" }
+      )
+    end
   end, {
     nargs = "?",
     complete = "dir",
@@ -65,6 +85,8 @@ function M.setup()
     force = true,
     desc = "Install or update the bundled vigit-review Codex skill",
   })
+  commands_registered = true
+  return true
 end
 
 function M.open(opts)

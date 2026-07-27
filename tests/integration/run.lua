@@ -4,6 +4,10 @@ local tests = {}
 local failed = 0
 local fixture_root = vim.fn.tempname()
 local finished = false
+local default_files = {
+  "tests/integration/process_spec.lua",
+  "tests/integration/git_read_spec.lua",
+}
 
 local function print_result(prefix, name, message)
   io.stdout:write(prefix .. " " .. name .. "\n")
@@ -30,6 +34,10 @@ end
 
 local function finish()
   vim.fn.delete(fixture_root, "rf")
+  print_result(
+    "SUMMARY",
+    string.format("%d tests, %d failures", #tests, failed)
+  )
   finished = true
 end
 
@@ -80,10 +88,12 @@ assert(vim.fn.mkdir(fixture_root, "p") == 1)
 vim.fn.system({ "git", "init", "-q", fixture_root })
 assert_equal(vim.v.shell_error, 0)
 
-for _, file in ipairs(arg) do
+local files = #arg > 0 and arg or default_files
+for _, file in ipairs(files) do
   dofile(file)
 end
 
+assert(#tests > 0, "integration runner loaded zero tests")
 run_test(1)
 
 local completed = vim.wait(#tests * 2000 + 100, function()

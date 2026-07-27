@@ -211,6 +211,111 @@ it("reads a symlink target without following it outside the root", function(done
   end)
 end)
 
+it("rejects absolute, empty and traversal untracked paths before reading", function(done)
+  local reads = 0
+  local filesystem = {
+    read_file = function(_, callback)
+      reads = reads + 1
+      callback({ ok = true, value = "must not be read" })
+      return { cancel = function() end }
+    end,
+  }
+  local git = git_cli.new(process, filesystem)
+  local paths = {
+    "",
+    ".",
+    "/tmp/outside",
+    "../outside",
+    "dir/../outside",
+    "dir/./file",
+    "dir//file",
+  }
+  local index = 0
+
+  local function check_next()
+    index = index + 1
+    local path = paths[index]
+    if not path then
+      assert_equal(reads, 0)
+      done()
+      return
+    end
+    git:diff(fixture.root, {
+      id = "unstaged\0" .. path,
+      section = "unstaged",
+      status = "?",
+      path = path,
+    }, 3, 1024, function(result)
+      assert_equal(result.ok, false)
+      assert_equal(result.error.code, "git_diff_failed")
+      check_next()
+    end)
+  end
+
+  check_next()
+end)
+
+it("rejects a canonical parent that escapes through a symlink", function(done)
+  local repo = git_repo.new()
+  local outside = vim.fn.tempname()
+  vim.fn.mkdir(outside, "p")
+  vim.fn.writefile({ "outside secret" }, outside .. "/secret.txt")
+  repo:symlink(outside, "escape")
+  local change = {
+    id = "unstaged\0escape/secret.txt",
+    section = "unstaged",
+    status = "?",
+    path = "escape/secret.txt",
+  }
+
+  git_cli.new(process):diff(repo.root, change, 3, 1024, function(result)
+    assert_equal(result.ok, false)
+    assert_equal(result.error.code, "git_diff_failed")
+    repo:cleanup()
+    vim.fn.delete(outside, "rf")
+    done()
+  end)
+end)
+
+it("rejects a file swapped to an outside symlink between lstat and open", function(done)
+  local repo = git_repo.new()
+  local outside = vim.fn.tempname()
+  local victim = repo.root .. "/victim.txt"
+  vim.fn.writefile({ "outside secret" }, outside)
+  repo:write("victim.txt", { "inside" })
+  local original_open = vim.uv.fs_open
+  local swapped = false
+
+  vim.uv.fs_open = function(path, flags, mode, callback)
+    if path == victim and not swapped then
+      swapped = true
+      assert_equal(vim.uv.fs_unlink(victim), true)
+      assert_equal(vim.uv.fs_symlink(outside, victim), true)
+    end
+    return original_open(path, flags, mode, callback)
+  end
+
+  git_cli.new(process):diff(repo.root, {
+    id = "unstaged\0victim.txt",
+    section = "unstaged",
+    status = "?",
+    path = "victim.txt",
+  }, 3, 1024, function(result)
+    vim.uv.fs_open = original_open
+    local ok, message = xpcall(function()
+      assert_equal(swapped, true)
+      assert_equal(result.ok, false)
+      assert_equal(result.error.code, "git_diff_failed")
+    end, debug.traceback)
+    repo:cleanup()
+    vim.fn.delete(outside)
+    if not ok then
+      error(message, 0)
+    end
+    done()
+  end)
+end)
+
 it("rejects unsupported worktree file types without opening them", function(done)
   local repo = git_repo.new()
   repo:mkfifo("named-pipe")
