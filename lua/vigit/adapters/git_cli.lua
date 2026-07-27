@@ -6,6 +6,7 @@ local M = {}
 
 local Git = {}
 Git.__index = Git
+local is_windows = package.config:sub(1, 1) == "\\"
 
 local function async_result(callback, result)
   vim.schedule(function()
@@ -23,7 +24,56 @@ local function same_file(original, opened)
     and opened.ino == original.ino
 end
 
-local function read_file(path, callback)
+local function normalized_path(path)
+  if is_windows then
+    path = path:gsub("\\", "/"):lower()
+  end
+  path = path:gsub("/+$", "")
+  return path == "" and "/" or path
+end
+
+local function is_within(root, candidate)
+  root = normalized_path(root)
+  candidate = normalized_path(candidate)
+  if root == "/" then
+    return candidate:sub(1, 1) == "/"
+  end
+  return candidate == root
+    or candidate:sub(1, #root + 1) == root .. "/"
+end
+
+local function descriptor_path(descriptor, canonical_root, callback)
+  local uname = vim.uv.os_uname()
+  if not uname or uname.sysname ~= "Linux" then
+    callback(Result.err(
+      "descriptor_path_unavailable",
+      "Opened file path cannot be verified on this platform"
+    ))
+    return
+  end
+
+  vim.uv.fs_realpath("/proc/self/fd/" .. descriptor, function(realpath_error, target)
+    if realpath_error or not target then
+      callback(Result.err(
+        "descriptor_path_unavailable",
+        "Opened file path cannot be verified",
+        realpath_error
+      ))
+      return
+    end
+    if not is_within(canonical_root, target) then
+      callback(Result.err(
+        "unsafe_path",
+        "Opened file is outside the repository root",
+        target
+      ))
+      return
+    end
+    callback(Result.ok(target))
+  end)
+end
+
+local function read_file(path, canonical_root, callback)
   local cancelled = false
 
   local function complete(result)
@@ -82,36 +132,56 @@ local function read_file(path, callback)
         return
       end
 
-      vim.uv.fs_fstat(descriptor, function(fstat_error, opened_stat)
+      local closed = false
+      local function close_descriptor()
+        if not closed then
+          closed = true
+          vim.uv.fs_close(descriptor)
+        end
+      end
+
+      descriptor_path(descriptor, canonical_root, function(path_result)
         if cancelled then
-          vim.uv.fs_close(descriptor)
+          close_descriptor()
           return
         end
-        if fstat_error then
-          vim.uv.fs_close(descriptor)
-          complete(Result.err(
-            "file_read_failed",
-            "Unable to inspect opened file",
-            fstat_error
-          ))
-          return
-        end
-        if not same_file(stat, opened_stat) then
-          vim.uv.fs_close(descriptor)
-          complete(Result.err(
-            "file_changed",
-            "File changed while it was being opened"
-          ))
+        if not path_result.ok then
+          close_descriptor()
+          complete(path_result)
           return
         end
 
-        vim.uv.fs_read(descriptor, opened_stat.size, 0, function(read_error, data)
-          vim.uv.fs_close(descriptor)
-          if read_error then
-            complete(Result.err("file_read_failed", "Unable to read file", read_error))
-          else
-            complete(Result.ok(data or ""))
+        vim.uv.fs_fstat(descriptor, function(fstat_error, opened_stat)
+          if cancelled then
+            close_descriptor()
+            return
           end
+          if fstat_error then
+            close_descriptor()
+            complete(Result.err(
+              "file_read_failed",
+              "Unable to inspect opened file",
+              fstat_error
+            ))
+            return
+          end
+          if not same_file(stat, opened_stat) then
+            close_descriptor()
+            complete(Result.err(
+              "file_changed",
+              "File changed while it was being opened"
+            ))
+            return
+          end
+
+          vim.uv.fs_read(descriptor, opened_stat.size, 0, function(read_error, data)
+            close_descriptor()
+            if read_error then
+              complete(Result.err("file_read_failed", "Unable to read file", read_error))
+            else
+              complete(Result.ok(data or ""))
+            end
+          end)
         end)
       end)
     end)
@@ -139,15 +209,28 @@ local function validate_relative_path(path)
   if path:find("\0", 1, true) then
     return path_error(path, "path contains NUL")
   end
-  if path:match("^[/\\]") or path:match("^%a:") then
-    return path_error(path, "path is absolute")
-  end
-  if path:match("[/\\]$") or path:match("[/\\][/\\]") then
-    return path_error(path, "path contains an empty component")
+
+  local component_pattern
+  if is_windows then
+    if path:match("^[/\\]") or path:match("^%a:") then
+      return path_error(path, "path is absolute")
+    end
+    if path:match("[/\\]$") or path:match("[/\\][/\\]") then
+      return path_error(path, "path contains an empty component")
+    end
+    component_pattern = "[^/\\]+"
+  else
+    if path:sub(1, 1) == "/" then
+      return path_error(path, "path is absolute")
+    end
+    if path:sub(-1) == "/" or path:find("//", 1, true) then
+      return path_error(path, "path contains an empty component")
+    end
+    component_pattern = "[^/]+"
   end
 
   local count = 0
-  for component in path:gmatch("[^/\\]+") do
+  for component in path:gmatch(component_pattern) do
     count = count + 1
     if component == "." or component == ".." then
       return path_error(path, "path contains a traversal component")
@@ -159,15 +242,12 @@ local function validate_relative_path(path)
   return nil
 end
 
-local function normalized_path(path)
-  return path:gsub("\\", "/"):gsub("/+$", "")
-end
-
-local function is_within(root, candidate)
-  root = normalized_path(root)
-  candidate = normalized_path(candidate)
-  return candidate == root
-    or candidate:sub(1, #root + 1) == root .. "/"
+local function path_parent_and_leaf(path)
+  if is_windows then
+    return path:match("^(.*)[/\\][^/\\]+$") or "",
+      path:match("([^/\\]+)$")
+  end
+  return path:match("^(.*)/[^/]+$") or "", path:match("([^/]+)$")
 end
 
 local function resolve_repository_path(root, path, callback)
@@ -193,8 +273,7 @@ local function resolve_repository_path(root, path, callback)
       return
     end
 
-    local parent = path:match("^(.*)[/\\][^/\\]+$") or ""
-    local leaf = path:match("([^/\\]+)$")
+    local parent, leaf = path_parent_and_leaf(path)
     local parent_path = parent == "" and canonical_root
       or canonical_root .. "/" .. parent
     vim.uv.fs_realpath(parent_path, function(parent_error, canonical_parent)
@@ -206,7 +285,10 @@ local function resolve_repository_path(root, path, callback)
         complete(path_error(path, "canonical parent escapes repository root"))
         return
       end
-      complete(Result.ok(canonical_parent .. "/" .. leaf))
+      complete(Result.ok({
+        path = canonical_parent .. "/" .. leaf,
+        root = canonical_root,
+      }))
     end)
   end)
 end
@@ -223,11 +305,15 @@ local function read_repository_file(reader, root, path, callback)
       callback(path_result)
       return
     end
-    read_handle = reader(path_result.value, function(result)
-      if not cancelled then
-        callback(result)
+    read_handle = reader(
+      path_result.value.path,
+      path_result.value.root,
+      function(result)
+        if not cancelled then
+          callback(result)
+        end
       end
-    end)
+    )
   end)
 
   return {

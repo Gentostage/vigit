@@ -214,7 +214,7 @@ end)
 it("rejects absolute, empty and traversal untracked paths before reading", function(done)
   local reads = 0
   local filesystem = {
-    read_file = function(_, callback)
+    read_file = function(_, _, callback)
       reads = reads + 1
       callback({ ok = true, value = "must not be read" })
       return { cancel = function() end }
@@ -273,6 +273,189 @@ it("rejects a canonical parent that escapes through a symlink", function(done)
     assert_equal(result.error.code, "git_diff_failed")
     repo:cleanup()
     vim.fn.delete(outside, "rf")
+    done()
+  end)
+end)
+
+it("reads POSIX untracked names containing backslash and colon", function(done)
+  if package.config:sub(1, 1) ~= "/" then
+    done()
+    return
+  end
+
+  local repo = git_repo.new()
+  local names = {
+    { path = "dir\\name.txt", content = "backslash" },
+    { path = "C:notes.txt", content = "colon" },
+  }
+  repo:write(names[1].path, { names[1].content })
+  repo:write(names[2].path, { names[2].content })
+  local git = git_cli.new(process)
+
+  git:status(repo.root, function(status_result)
+    assert_truthy(status_result.ok)
+    local index = 0
+    local function read_next()
+      index = index + 1
+      local expected = names[index]
+      if not expected then
+        repo:cleanup()
+        done()
+        return
+      end
+
+      local change = find_change(status_result.value.unstaged, expected.path)
+      assert_truthy(change)
+      git:diff(repo.root, change, 3, 1024, function(diff_result)
+        assert_truthy(diff_result.ok)
+        assert_equal(diff_result.value.hunks[1].lines[1].text, expected.content)
+        read_next()
+      end)
+    end
+    read_next()
+  end)
+end)
+
+it("rejects a POSIX backslash sibling outside the repository", function(done)
+  if package.config:sub(1, 1) ~= "/" then
+    done()
+    return
+  end
+
+  local repo = git_repo.new()
+  local outside = repo.root .. "\\outside"
+  vim.fn.mkdir(outside, "p")
+  vim.fn.writefile({ "outside secret" }, outside .. "/secret.txt")
+  repo:symlink(outside, "escape-backslash")
+  local change = {
+    id = "unstaged\0escape-backslash/secret.txt",
+    section = "unstaged",
+    status = "?",
+    path = "escape-backslash/secret.txt",
+  }
+
+  git_cli.new(process):diff(repo.root, change, 3, 1024, function(result)
+    local ok, message = xpcall(function()
+      assert_equal(result.ok, false)
+      assert_equal(result.error.code, "git_diff_failed")
+    end, debug.traceback)
+    repo:cleanup()
+    vim.fn.delete(outside, "rf")
+    if not ok then
+      error(message, 0)
+    end
+    done()
+  end)
+end)
+
+it("rejects a parent swapped after canonicalization but before lstat", function(done)
+  local repo = git_repo.new()
+  local outside = vim.fn.tempname()
+  local parent = repo.root .. "/parent"
+  local original_parent = repo.root .. "/parent-original"
+  local victim = parent .. "/victim.txt"
+  vim.fn.mkdir(outside, "p")
+  vim.fn.writefile({ "outside secret" }, outside .. "/victim.txt")
+  repo:write("parent/victim.txt", { "inside" })
+  local original_lstat = vim.uv.fs_lstat
+  local original_read = vim.uv.fs_read
+  local swapped = false
+  local swap_error
+  local reads = 0
+
+  vim.uv.fs_lstat = function(path, callback)
+    if path == victim and not swapped then
+      swapped = true
+      local renamed, rename_error = vim.uv.fs_rename(parent, original_parent)
+      if not renamed then
+        swap_error = rename_error
+      else
+        local linked, link_error = vim.uv.fs_symlink(outside, parent)
+        if not linked then
+          swap_error = link_error
+        end
+      end
+    end
+    return original_lstat(path, callback)
+  end
+  vim.uv.fs_read = function(...)
+    reads = reads + 1
+    return original_read(...)
+  end
+
+  git_cli.new(process):diff(repo.root, {
+    id = "unstaged\0parent/victim.txt",
+    section = "unstaged",
+    status = "?",
+    path = "parent/victim.txt",
+  }, 3, 1024, function(result)
+    vim.uv.fs_lstat = original_lstat
+    vim.uv.fs_read = original_read
+    local ok, message = xpcall(function()
+      assert_equal(swapped, true)
+      assert_equal(swap_error, nil)
+      assert_equal(reads, 0)
+      assert_equal(result.ok, false)
+      assert_equal(result.error.code, "git_diff_failed")
+    end, debug.traceback)
+    repo:cleanup()
+    vim.fn.delete(outside, "rf")
+    if not ok then
+      error(message, 0)
+    end
+    done()
+  end)
+end)
+
+it("fails closed and closes fd when descriptor path is unavailable", function(done)
+  local repo = git_repo.new()
+  repo:write("victim.txt", { "inside" })
+  local original_open = vim.uv.fs_open
+  local original_realpath = vim.uv.fs_realpath
+  local original_close = vim.uv.fs_close
+  local descriptor
+  local closes = 0
+
+  vim.uv.fs_open = function(path, flags, mode, callback)
+    return original_open(path, flags, mode, function(open_error, opened_descriptor)
+      descriptor = opened_descriptor
+      callback(open_error, opened_descriptor)
+    end)
+  end
+  vim.uv.fs_realpath = function(path, callback)
+    if path:match("^/proc/self/fd/") then
+      callback("injected descriptor path failure")
+      return
+    end
+    return original_realpath(path, callback)
+  end
+  vim.uv.fs_close = function(opened_descriptor, ...)
+    if opened_descriptor == descriptor then
+      closes = closes + 1
+    end
+    return original_close(opened_descriptor, ...)
+  end
+
+  git_cli.new(process):diff(repo.root, {
+    id = "unstaged\0victim.txt",
+    section = "unstaged",
+    status = "?",
+    path = "victim.txt",
+  }, 3, 1024, function(result)
+    vim.uv.fs_open = original_open
+    vim.uv.fs_realpath = original_realpath
+    vim.uv.fs_close = original_close
+    local ok, message = xpcall(function()
+      assert_truthy(descriptor)
+      assert_equal(closes, 1)
+      assert_equal(result.ok, false)
+      assert_equal(result.error.code, "git_diff_failed")
+      assert_truthy(result.error.details:match("descriptor path failure"))
+    end, debug.traceback)
+    repo:cleanup()
+    if not ok then
+      error(message, 0)
+    end
     done()
   end)
 end)
