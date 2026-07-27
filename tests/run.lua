@@ -19,8 +19,10 @@ local default_files = {
   "tests/unit/diff_spec.lua",
   "tests/unit/registry_spec.lua",
   "tests/unit/changes_spec.lua",
+  "tests/unit/descriptor_path_spec.lua",
 }
 
+local using_default_files = #arg == 0
 local files = #arg > 0 and arg or default_files
 testlib.load({})
 
@@ -36,6 +38,12 @@ for _, file in ipairs(files) do
 end
 
 assert(test_count > 0, "test runner loaded zero tests")
+if using_default_files then
+  assert(
+    test_count == 95,
+    string.format("expected 95 default tests, loaded %d", test_count)
+  )
+end
 
 local success = testlib.execute()
 print(string.format(

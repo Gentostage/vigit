@@ -413,8 +413,10 @@ it("fails closed and closes fd when descriptor path is unavailable", function(do
   local original_open = vim.uv.fs_open
   local original_realpath = vim.uv.fs_realpath
   local original_close = vim.uv.fs_close
+  local original_fstat = vim.uv.fs_fstat
   local descriptor
   local closes = 0
+  local fstats = 0
 
   vim.uv.fs_open = function(path, flags, mode, callback)
     return original_open(path, flags, mode, function(open_error, opened_descriptor)
@@ -435,6 +437,10 @@ it("fails closed and closes fd when descriptor path is unavailable", function(do
     end
     return original_close(opened_descriptor, ...)
   end
+  vim.uv.fs_fstat = function(...)
+    fstats = fstats + 1
+    return original_fstat(...)
+  end
 
   git_cli.new(process):diff(repo.root, {
     id = "unstaged\0victim.txt",
@@ -445,9 +451,11 @@ it("fails closed and closes fd when descriptor path is unavailable", function(do
     vim.uv.fs_open = original_open
     vim.uv.fs_realpath = original_realpath
     vim.uv.fs_close = original_close
+    vim.uv.fs_fstat = original_fstat
     local ok, message = xpcall(function()
       assert_truthy(descriptor)
       assert_equal(closes, 1)
+      assert_equal(fstats, 0)
       assert_equal(result.ok, false)
       assert_equal(result.error.code, "git_diff_failed")
       assert_truthy(result.error.details:match("descriptor path failure"))

@@ -1,4 +1,5 @@
 local Result = require("vigit.core.result")
+local DescriptorPath = require("vigit.adapters.descriptor_path")
 local status_parser = require("vigit.core.status")
 local diff_parser = require("vigit.core.diff")
 
@@ -42,38 +43,7 @@ local function is_within(root, candidate)
     or candidate:sub(1, #root + 1) == root .. "/"
 end
 
-local function descriptor_path(descriptor, canonical_root, callback)
-  local uname = vim.uv.os_uname()
-  if not uname or uname.sysname ~= "Linux" then
-    callback(Result.err(
-      "descriptor_path_unavailable",
-      "Opened file path cannot be verified on this platform"
-    ))
-    return
-  end
-
-  vim.uv.fs_realpath("/proc/self/fd/" .. descriptor, function(realpath_error, target)
-    if realpath_error or not target then
-      callback(Result.err(
-        "descriptor_path_unavailable",
-        "Opened file path cannot be verified",
-        realpath_error
-      ))
-      return
-    end
-    if not is_within(canonical_root, target) then
-      callback(Result.err(
-        "unsafe_path",
-        "Opened file is outside the repository root",
-        target
-      ))
-      return
-    end
-    callback(Result.ok(target))
-  end)
-end
-
-local function read_file(path, canonical_root, callback)
+local function read_file(path, canonical_root, descriptor_paths, callback)
   local cancelled = false
 
   local function complete(result)
@@ -140,7 +110,7 @@ local function read_file(path, canonical_root, callback)
         end
       end
 
-      descriptor_path(descriptor, canonical_root, function(path_result)
+      descriptor_paths:verify(descriptor, canonical_root, function(path_result)
         if cancelled then
           close_descriptor()
           return
@@ -410,10 +380,18 @@ local function synthetic_diff(change, content)
   return parsed
 end
 
-function M.new(process, filesystem)
+function M.new(process, filesystem, descriptor_paths)
+  local reader = filesystem and filesystem.read_file
+  if not reader then
+    descriptor_paths = descriptor_paths or DescriptorPath.new()
+    reader = function(path, root, callback)
+      return read_file(path, root, descriptor_paths, callback)
+    end
+  end
+
   return setmetatable({
     process = assert(process),
-    read_file = filesystem and filesystem.read_file or read_file,
+    read_file = reader,
   }, Git)
 end
 
