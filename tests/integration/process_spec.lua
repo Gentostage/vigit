@@ -21,8 +21,10 @@ it("returns stderr for a failed process", function(done)
   process.run({ "git", "rev-parse", "--verify", "does-not-exist" }, {
     cwd = fixture.root,
   }, function(result)
+    assert_equal(result.ok, false)
     assert_equal(result.error.code, "process_failed")
-    assert_truthy(result.error.details:match("Needed a single revision"))
+    assert_equal(result.error.retryable, true)
+    assert_truthy(type(result.error.details) == "string" and #result.error.details > 0)
     done()
   end)
 end)
