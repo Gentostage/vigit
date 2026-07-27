@@ -4,6 +4,7 @@ local neovim = require("vigit.adapters.neovim")
 local controller = require("vigit.ui.controller")
 local layout = require("vigit.ui.layout")
 local keymaps = require("vigit.ui.keymaps")
+local renderer = require("vigit.ui.renderer")
 local changes_view = require("vigit.ui.views.changes")
 local diff_view = require("vigit.ui.views.diff")
 
@@ -191,6 +192,47 @@ it("closes the remaining owned tab when either owned buffer is wiped directly", 
   end
 end)
 
+it("rolls back partial layout resources before returning an open error", function()
+  local repo = Fixture.new()
+  local reopened
+  local original_create_buf = vim.api.nvim_create_buf
+  local original_tabs = vim.api.nvim_list_tabpages()
+  local original_tab_set = {}
+  for _, tab in ipairs(original_tabs) do
+    original_tab_set[tab] = true
+  end
+
+  local ok, message = xpcall(function()
+    vim.api.nvim_create_buf = function()
+      error("injected layout failure")
+    end
+    local session, open_error = v2.open({ cwd = repo.root })
+    vim.api.nvim_create_buf = original_create_buf
+
+    assert_equal(session, nil)
+    assert_equal(open_error.code, "ui_open_failed")
+    assert_equal(#vim.api.nvim_list_tabpages(), #original_tabs)
+    for _, buffer in ipairs(vim.api.nvim_list_bufs()) do
+      assert_truthy(not vim.api.nvim_buf_get_name(buffer):match("^vigit://"))
+    end
+
+    reopened = assert(v2.open({ cwd = repo.root }))
+  end, debug.traceback)
+
+  vim.api.nvim_create_buf = original_create_buf
+  for _, tab in ipairs(vim.api.nvim_list_tabpages()) do
+    if not original_tab_set[tab] then
+      vim.api.nvim_set_current_tabpage(tab)
+      pcall(vim.cmd, "tabclose")
+    end
+  end
+  close_session(reopened)
+  repo:cleanup()
+  if not ok then
+    error(message, 0)
+  end
+end)
+
 it("renders status before an explicitly selected diff and dispatches cursor selection", function()
   local repo = Fixture.new()
   local session
@@ -272,8 +314,13 @@ it("keeps changes in a toggleable overlay below eighty columns", function()
   local session
   local original_columns = vim.o.columns
   local ok, message = xpcall(function()
+    local long_path = string.rep("long-name-", 12) .. ".lua"
+    repo:write(long_path, { "return true" })
     vim.o.columns = 79
     session = assert(v2.open({ cwd = repo.root }))
+    assert_truthy(vim.wait(1000, function()
+      return #renderer.file_targets(session) == 1
+    end, 10))
     local config = vim.api.nvim_win_get_config(session.owned.changes_win)
     assert_equal(config.relative, "editor")
     assert_truthy(config.width >= 24 and config.width <= 36)
@@ -283,9 +330,20 @@ it("keeps changes in a toggleable overlay below eighty columns", function()
     assert_equal(vim.api.nvim_win_is_valid(session.owned.changes_win), false)
     assert_equal(vim.api.nvim_get_current_win(), session.owned.diff_win)
 
+    vim.api.nvim_exec_autocmds("VimResized", {})
+    assert_equal(vim.api.nvim_win_is_valid(session.owned.changes_win), false)
+    assert_equal(vim.api.nvim_get_current_win(), session.owned.diff_win)
+
+    renderer.render(session)
     controller.dispatch(session, "toggle_focus")
     assert_truthy(vim.api.nvim_win_is_valid(session.owned.changes_win))
     assert_equal(vim.api.nvim_win_get_config(session.owned.changes_win).relative, "editor")
+    local target = assert(renderer.file_targets(session)[1])
+    local line = buffer_lines(session.owned.changes_buf)[target.row]
+    assert_truthy(
+      vim.fn.strdisplaywidth(line)
+        <= vim.api.nvim_win_get_width(session.owned.changes_win)
+    )
 
     vim.o.columns = 100
     vim.api.nvim_exec_autocmds("VimResized", {})
@@ -308,6 +366,50 @@ it("keeps changes in a toggleable overlay below eighty columns", function()
   vim.o.columns = original_columns
   close_session(session)
   repo:cleanup()
+  if not ok then
+    error(message, 0)
+  end
+end)
+
+it("resizes hidden sessions on tab enter and repeated open", function()
+  local repo_a = Fixture.new()
+  local repo_b = Fixture.new()
+  local sessions = {}
+  local original_columns = vim.o.columns
+  local ok, message = xpcall(function()
+    vim.o.columns = 100
+    local a = assert(v2.open({ cwd = repo_a.root }))
+    local b = assert(v2.open({ cwd = repo_b.root }))
+    sessions = { a, b }
+
+    vim.o.columns = 79
+    vim.api.nvim_exec_autocmds("VimResized", {})
+    assert_equal(vim.api.nvim_win_get_config(b.owned.changes_win).relative, "editor")
+    assert_equal(vim.api.nvim_win_get_config(a.owned.changes_win).relative, "")
+
+    vim.api.nvim_set_current_tabpage(a.owned.tab)
+    assert_truthy(vim.wait(1000, function()
+      return vim.api.nvim_win_get_config(a.owned.changes_win).relative == "editor"
+    end, 10))
+
+    vim.api.nvim_set_current_tabpage(b.owned.tab)
+    vim.o.columns = 100
+    vim.api.nvim_exec_autocmds("VimResized", {})
+    assert_equal(vim.api.nvim_win_get_config(b.owned.changes_win).relative, "")
+    assert_equal(vim.api.nvim_win_get_config(a.owned.changes_win).relative, "editor")
+
+    local again = assert(v2.open({ cwd = repo_a.root }))
+    assert_equal(again.id, a.id)
+    assert_truthy(vim.wait(1000, function()
+      return vim.api.nvim_win_get_config(a.owned.changes_win).relative == ""
+    end, 10))
+  end, debug.traceback)
+
+  vim.o.columns = original_columns
+  for _, session in ipairs(sessions) do
+    close_session(session)
+  end
+  cleanup_fixtures({ repo_a, repo_b })
   if not ok then
     error(message, 0)
   end
@@ -374,6 +476,209 @@ it("returns file hit targets and marker-free view models", function()
   assert_equal(diff.lines[hunk_row + 1], "return false")
   assert_equal(diff.lines[hunk_row + 2], "return true")
   assert_equal(diff.lines[hunk_row + 3], long_line)
+end)
+
+it("escapes control characters for display and preserves raw hit targets", function()
+  local path = "dir/odd\nname\t" .. string.char(1) .. ".lua"
+  local change = {
+    id = "unstaged\0" .. path,
+    section = "unstaged",
+    status = "M",
+    path = path,
+  }
+  local state = {
+    view = {
+      changes_mode = "list",
+      diff_mode = "one_file",
+      selected_change_id = change.id,
+      all_files = { loaded = {}, loading = {} },
+    },
+    data = {
+      status = {
+        branch = {},
+        staged = {},
+        unstaged = { change },
+      },
+      diffs = {
+        [change.id] = {
+          path = path,
+          section = "unstaged",
+          status = "M",
+          headers = {},
+          hunks = {},
+        },
+      },
+    },
+    busy = { diff = {} },
+  }
+
+  local changes = changes_view.render(state, 80)
+  local target = assert(changes.targets[1])
+  assert_equal(changes.lines[target.row], "  M dir/odd\\nname\\t\\x01.lua")
+  assert_equal(target.change.path, path)
+
+  local diff = diff_view.render(state, 80)
+  assert_equal(diff.lines[1], "[UNSTAGED] dir/odd\\nname\\t\\x01.lua")
+
+  local newline_path = "name\n.lua"
+  local literal_path = "name\\n.lua"
+  local collision = changes_view.render({
+    view = { changes_mode = "list" },
+    data = {
+      status = {
+        staged = {},
+        unstaged = {
+          {
+            id = "unstaged\0" .. newline_path,
+            section = "unstaged",
+            status = "M",
+            path = newline_path,
+          },
+          {
+            id = "unstaged\0" .. literal_path,
+            section = "unstaged",
+            status = "M",
+            path = literal_path,
+          },
+        },
+      },
+    },
+  }, 80)
+  local first = collision.targets[1]
+  local second = collision.targets[2]
+  assert_truthy(collision.lines[first.row] ~= collision.lines[second.row])
+  assert_equal(collision.lines[first.row], "  M name\\n.lua")
+  assert_equal(collision.lines[second.row], "  M name\\\\n.lua")
+  assert_equal(first.change.path, newline_path)
+  assert_equal(second.change.path, literal_path)
+
+  local error_state = {
+    view = {},
+    error = { message = "read failed\ntry again" },
+  }
+  assert_equal(
+    changes_view.render(error_state, 80).lines[1],
+    "Error: read failed\\ntry again"
+  )
+  assert_equal(
+    diff_view.render(error_state, 80).lines[1],
+    "Error: read failed\\ntry again"
+  )
+end)
+
+it("shortens Unicode display text without splitting a codepoint", function()
+  local path = "目录/файл-с-длинным-именем.lua"
+  local change = {
+    id = "unstaged\0" .. path,
+    section = "unstaged",
+    status = "M",
+    path = path,
+  }
+  local state = {
+    view = {
+      changes_mode = "list",
+      diff_mode = "one_file",
+      selected_change_id = change.id,
+      all_files = { loaded = {}, loading = {} },
+    },
+    data = {
+      status = {
+        branch = {},
+        staged = {},
+        unstaged = { change },
+      },
+      diffs = {
+        [change.id] = {
+          path = path,
+          section = "unstaged",
+          status = "M",
+          headers = {},
+          hunks = {},
+        },
+      },
+    },
+    busy = { diff = {} },
+  }
+
+  local changes_line = changes_view.render(state, 14).lines[2]
+  local diff_line = diff_view.render(state, 14).lines[1]
+
+  assert_truthy(pcall(vim.str_utfindex, changes_line))
+  assert_truthy(pcall(vim.str_utfindex, diff_line))
+  assert_truthy(vim.fn.strdisplaywidth(changes_line) <= 14)
+  assert_truthy(vim.fn.strdisplaywidth(diff_line) <= 14)
+  assert_truthy(changes_line:sub(-3) == "…")
+  assert_truthy(diff_line:sub(-3) == "…")
+end)
+
+it("restores nomodifiable after a renderer exception", function()
+  local repo = Fixture.new()
+  local session
+  local original_set_lines = vim.api.nvim_buf_set_lines
+  local ok, message = xpcall(function()
+    session = assert(v2.open({ cwd = repo.root }))
+    vim.api.nvim_buf_set_lines = function(buffer, ...)
+      if buffer == session.owned.changes_buf then
+        error("injected render failure")
+      end
+      return original_set_lines(buffer, ...)
+    end
+
+    local rendered = pcall(renderer.render, session)
+    vim.api.nvim_buf_set_lines = original_set_lines
+
+    assert_equal(rendered, false)
+    assert_equal(vim.bo[session.owned.changes_buf].modifiable, false)
+  end, debug.traceback)
+
+  vim.api.nvim_buf_set_lines = original_set_lines
+  close_session(session)
+  repo:cleanup()
+  if not ok then
+    error(message, 0)
+  end
+end)
+
+it("clears stale hit targets after a partial renderer failure", function()
+  local repo = Fixture.new()
+  local session
+  local original_clear_namespace = vim.api.nvim_buf_clear_namespace
+  local ok, message = xpcall(function()
+    repo:write("first.lua", { "return true" })
+    session = assert(v2.open({ cwd = repo.root }))
+    assert_truthy(vim.wait(1000, function()
+      return #renderer.file_targets(session) == 1
+    end, 10))
+
+    local old_target = renderer.file_targets(session)[1]
+    session.data.status = {
+      branch = {},
+      staged = {},
+      unstaged = {},
+    }
+    vim.api.nvim_buf_clear_namespace = function(buffer, ...)
+      if buffer == session.owned.changes_buf then
+        error("injected namespace failure")
+      end
+      return original_clear_namespace(buffer, ...)
+    end
+
+    local rendered = pcall(renderer.render, session)
+    vim.api.nvim_buf_clear_namespace = original_clear_namespace
+
+    assert_equal(rendered, false)
+    assert_equal(buffer_lines(session.owned.changes_buf)[1], "No changes")
+    assert_equal(#renderer.file_targets(session), 0)
+    assert_equal(renderer.target_at(session.owned.changes_buf, old_target.row), nil)
+    assert_equal(vim.bo[session.owned.changes_buf].modifiable, false)
+  end, debug.traceback)
+
+  vim.api.nvim_buf_clear_namespace = original_clear_namespace
+  close_session(session)
+  repo:cleanup()
+  if not ok then
+    error(message, 0)
+  end
 end)
 
 it("publishes the basic normal-mode key registry", function()

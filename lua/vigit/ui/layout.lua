@@ -89,28 +89,56 @@ local function cancel_reads(session)
   session.reads.jobs = {}
 end
 
+local function rollback_open(session, original_tab)
+  local owned_tab = session.owned.tab
+  if owned_tab
+      and owned_tab ~= original_tab
+      and vim.api.nvim_tabpage_is_valid(owned_tab) then
+    pcall(vim.api.nvim_set_current_tabpage, owned_tab)
+    pcall(vim.cmd, "tabclose")
+  end
+
+  for _, key in ipairs({ "diff_buf", "changes_buf" }) do
+    local buffer = session.owned[key]
+    if buffer and vim.api.nvim_buf_is_valid(buffer) then
+      pcall(vim.api.nvim_buf_delete, buffer, { force = true })
+    end
+  end
+  if original_tab and vim.api.nvim_tabpage_is_valid(original_tab) then
+    pcall(vim.api.nvim_set_current_tabpage, original_tab)
+  end
+end
+
 function M.open(session)
-  vim.cmd("tabnew")
-  session.owned.tab = vim.api.nvim_get_current_tabpage()
-  session.owned.diff_win = vim.api.nvim_get_current_win()
-  session.owned.diff_buf = vim.api.nvim_get_current_buf()
-  configure_buffer(
-    session.owned.diff_buf,
-    string.format("vigit://%s/diff", session.id),
-    "vigit-diff"
-  )
+  local original_tab = vim.api.nvim_get_current_tabpage()
+  local ok, message = xpcall(function()
+    session.view.changes_overlay_visible = true
+    vim.cmd("tabnew")
+    session.owned.tab = vim.api.nvim_get_current_tabpage()
+    session.owned.diff_win = vim.api.nvim_get_current_win()
+    session.owned.diff_buf = vim.api.nvim_get_current_buf()
+    configure_buffer(
+      session.owned.diff_buf,
+      string.format("vigit://%s/diff", session.id),
+      "vigit-diff"
+    )
 
-  session.owned.changes_buf = vim.api.nvim_create_buf(false, true)
-  configure_buffer(
-    session.owned.changes_buf,
-    string.format("vigit://%s/changes", session.id),
-    "vigit-changes"
-  )
+    session.owned.changes_buf = vim.api.nvim_create_buf(false, true)
+    configure_buffer(
+      session.owned.changes_buf,
+      string.format("vigit://%s/changes", session.id),
+      "vigit-changes"
+    )
 
-  if vim.o.columns < 80 then
-    open_changes_float(session, true)
-  else
-    open_changes_split(session, true)
+    if vim.o.columns < 80 then
+      open_changes_float(session, true)
+    else
+      open_changes_split(session, true)
+    end
+  end, debug.traceback)
+  if not ok then
+    rollback_open(session, original_tab)
+    error(message, 0)
   end
   return session
 end
@@ -130,6 +158,12 @@ function M.resize(session)
   local was_changes = changes_valid and vim.api.nvim_get_current_win() == changes_win
 
   if narrow then
+    if session.view.changes_overlay_visible == false then
+      if changes_valid then
+        close_changes_window(session)
+      end
+      return
+    end
     if changes_valid and current_float then
       vim.api.nvim_win_set_config(changes_win, float_config())
       return
@@ -159,12 +193,15 @@ function M.toggle_changes(session)
   if vim.o.columns < 80 then
     if valid_window(session.owned.changes_win) then
       if vim.api.nvim_get_current_win() == session.owned.changes_win then
+        session.view.changes_overlay_visible = false
         close_changes_window(session)
         vim.api.nvim_set_current_win(session.owned.diff_win)
       else
+        session.view.changes_overlay_visible = true
         vim.api.nvim_set_current_win(session.owned.changes_win)
       end
     else
+      session.view.changes_overlay_visible = true
       open_changes_float(session, true)
     end
     return

@@ -26,7 +26,7 @@ local defaults = {
 local schema = {
   ui = {
     changes_side = "string",
-    changes_width = "number",
+    changes_width = "integer",
     changes_mode = "string",
     context_lines = "number",
     max_diff_bytes = "number",
@@ -92,6 +92,11 @@ local function merge_object(default_value, object_schema, user_value, path)
     elseif field == "handler" then
       if value ~= false and type(value) ~= "function" then
         return nil, invalid(field_path, "a function or false")
+      end
+      result[key] = value
+    elseif field == "integer" then
+      if type(value) ~= "number" or value % 1 ~= 0 then
+        return nil, invalid(field_path, "an integer")
       end
       result[key] = value
     elseif type(value) ~= field then

@@ -7,11 +7,43 @@ local groups = {
   meta = "Comment",
 }
 
+local function escape_control(text)
+  text = text:gsub("\\", "\\\\")
+  return (text:gsub("[%z\1-\31\127]", function(character)
+    if character == "\n" then
+      return "\\n"
+    elseif character == "\r" then
+      return "\\r"
+    elseif character == "\t" then
+      return "\\t"
+    end
+    return string.format("\\x%02X", character:byte())
+  end))
+end
+
 local function shorten(text, width)
-  if width <= 1 or #text <= width then
+  if vim.fn.strdisplaywidth(text) <= width then
     return text
   end
-  return text:sub(1, width - 1) .. "…"
+
+  local ellipsis = "…"
+  local available = width - vim.fn.strdisplaywidth(ellipsis)
+  if available <= 0 then
+    return ellipsis
+  end
+
+  local low = 0
+  local high = vim.fn.strchars(text)
+  while low < high do
+    local middle = math.ceil((low + high) / 2)
+    local prefix = vim.fn.strcharpart(text, 0, middle)
+    if vim.fn.strdisplaywidth(prefix) <= available then
+      low = middle
+    else
+      high = middle - 1
+    end
+  end
+  return vim.fn.strcharpart(text, 0, low) .. ellipsis
 end
 
 local function add_line(output, line, group, truncate)
@@ -39,7 +71,7 @@ end
 local function render_file(output, change, diff, loading)
   local section = (change.section or diff and diff.section or ""):upper()
   local path = change.path or diff and diff.path or "unknown"
-  add_line(output, string.format("[%s] %s", section, path), "Title")
+  add_line(output, string.format("[%s] %s", section, escape_control(path)), "Title")
 
   if loading and not diff then
     add_line(output, "Loading diff…", "Comment")
@@ -55,7 +87,7 @@ local function render_file(output, change, diff, loading)
   end
 
   for _, header in ipairs(diff.headers or {}) do
-    add_line(output, header, "Comment")
+    add_line(output, escape_control(header), "Comment")
   end
   if #(diff.hunks or {}) == 0 then
     add_line(output, "No textual changes", "Comment")
@@ -63,7 +95,7 @@ local function render_file(output, change, diff, loading)
   end
 
   for _, hunk in ipairs(diff.hunks) do
-    add_line(output, hunk.header, "DiffText")
+    add_line(output, escape_control(hunk.header), "DiffText")
     for _, line in ipairs(hunk.lines or {}) do
       add_line(output, line.text, groups[line.kind], false)
     end
@@ -89,7 +121,7 @@ function M.render(state, width)
 
   if not status then
     if state.error then
-      add_line(output, "Error: " .. state.error.message, "ErrorMsg")
+      add_line(output, escape_control("Error: " .. state.error.message), "ErrorMsg")
     else
       add_line(output, "Loading changes…", "Comment")
     end
@@ -130,7 +162,7 @@ function M.render(state, width)
         loading[change.id]
       )
       if state.error and not state.data.diffs[change.id] then
-        add_line(output, "Error: " .. state.error.message, "ErrorMsg")
+        add_line(output, escape_control("Error: " .. state.error.message), "ErrorMsg")
       end
     end
   end

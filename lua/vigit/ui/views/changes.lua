@@ -1,10 +1,42 @@
 local M = {}
 
+local function escape_control(text)
+  text = text:gsub("\\", "\\\\")
+  return (text:gsub("[%z\1-\31\127]", function(character)
+    if character == "\n" then
+      return "\\n"
+    elseif character == "\r" then
+      return "\\r"
+    elseif character == "\t" then
+      return "\\t"
+    end
+    return string.format("\\x%02X", character:byte())
+  end))
+end
+
 local function shorten(text, width)
-  if width <= 1 or #text <= width then
+  if vim.fn.strdisplaywidth(text) <= width then
     return text
   end
-  return text:sub(1, width - 1) .. "…"
+
+  local ellipsis = "…"
+  local available = width - vim.fn.strdisplaywidth(ellipsis)
+  if available <= 0 then
+    return ellipsis
+  end
+
+  local low = 0
+  local high = vim.fn.strchars(text)
+  while low < high do
+    local middle = math.ceil((low + high) / 2)
+    local prefix = vim.fn.strcharpart(text, 0, middle)
+    if vim.fn.strdisplaywidth(prefix) <= available then
+      low = middle
+    else
+      high = middle - 1
+    end
+  end
+  return vim.fn.strcharpart(text, 0, low) .. ellipsis
 end
 
 local function add_line(output, line, highlight)
@@ -33,9 +65,14 @@ end
 
 local function render_list(output, changes, width)
   for _, change in ipairs(changes) do
-    local label = string.format("  %s %s", change.status, change.path)
+    local label = string.format("  %s %s", change.status, escape_control(change.path))
     if change.old_path then
-      label = string.format("  %s %s → %s", change.status, change.old_path, change.path)
+      label = string.format(
+        "  %s %s → %s",
+        change.status,
+        escape_control(change.old_path),
+        escape_control(change.path)
+      )
     end
     local row = add_line(output, shorten(label, width))
     add_target(output, row, {
@@ -57,7 +94,10 @@ local function render_tree(output, changes, width)
       if not emitted[parent] then
         emitted[parent] = true
         local indent = string.rep("  ", index)
-        local row = add_line(output, shorten(indent .. "▾ " .. parts[index] .. "/", width))
+        local row = add_line(
+          output,
+          shorten(indent .. "▾ " .. escape_control(parts[index]) .. "/", width)
+        )
         add_target(output, row, {
           kind = "directory",
           path = parent,
@@ -69,7 +109,10 @@ local function render_tree(output, changes, width)
     local name = parts[#parts] or change.path
     local row = add_line(
       output,
-      shorten(string.format("%s%s %s", indent, change.status, name), width)
+      shorten(
+        string.format("%s%s %s", indent, change.status, escape_control(name)),
+        width
+      )
     )
     add_target(output, row, {
       kind = "change",
@@ -106,7 +149,11 @@ function M.render(state, width)
 
   if not status then
     if state.error then
-      add_line(output, shorten("Error: " .. state.error.message, width), "ErrorMsg")
+      add_line(
+        output,
+        shorten(escape_control("Error: " .. state.error.message), width),
+        "ErrorMsg"
+      )
     else
       add_line(output, "Loading changes…", "Comment")
     end
@@ -114,7 +161,11 @@ function M.render(state, width)
   end
 
   if state.error then
-    add_line(output, shorten("Error: " .. state.error.message, width), "ErrorMsg")
+    add_line(
+      output,
+      shorten(escape_control("Error: " .. state.error.message), width),
+      "ErrorMsg"
+    )
   end
 
   local mode = state.view and state.view.changes_mode or "tree"

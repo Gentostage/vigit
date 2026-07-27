@@ -85,6 +85,7 @@ function M.dispatch(session, intent)
 
   if name == "toggle_focus" then
     layout.toggle_changes(session)
+    renderer.render(session)
   elseif name == "activate" or name == "select_change" then
     select_change(session, intent)
   elseif name == "next_file" then

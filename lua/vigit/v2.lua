@@ -85,6 +85,7 @@ local function focus_existing(session)
     return false
   end
   vim.api.nvim_set_current_tabpage(session.owned.tab)
+  controller.dispatch(session, "resize")
   return true
 end
 
@@ -114,6 +115,8 @@ function M.open(opts)
 
   local ok, open_error = pcall(layout.open, session)
   if not ok then
+    renderer.clear(session)
+    pcall(layout.close, session)
     session.closed = true
     registry:remove(session.id)
     return nil, {

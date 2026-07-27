@@ -96,7 +96,7 @@ end
 function M.apply(session)
   apply_context(session, session.owned.diff_buf, "diff")
   apply_context(session, session.owned.changes_buf, "changes")
-  local resize_autocmd = vim.api.nvim_create_autocmd("VimResized", {
+  local resize_autocmd = vim.api.nvim_create_autocmd({ "VimResized", "TabEnter" }, {
     callback = function()
       if not session.closed
           and session.owned.tab

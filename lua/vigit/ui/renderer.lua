@@ -25,26 +25,34 @@ local function apply(buffer, namespace, output)
     return
   end
 
+  targets[buffer] = nil
   vim.bo[buffer].modifiable = true
-  vim.api.nvim_buf_set_lines(buffer, 0, -1, false, output.lines)
-  vim.api.nvim_buf_clear_namespace(buffer, namespace, 0, -1)
+  local ok, message = xpcall(function()
+    vim.api.nvim_buf_set_lines(buffer, 0, -1, false, output.lines)
+    vim.api.nvim_buf_clear_namespace(buffer, namespace, 0, -1)
 
-  for _, highlight in ipairs(output.highlights or {}) do
-    vim.api.nvim_buf_set_extmark(buffer, namespace, highlight.row - 1, 0, {
-      end_row = highlight.row,
-      hl_group = highlight.group,
-      hl_eol = true,
-      strict = false,
-    })
-  end
-  for _, target in ipairs(output.targets or {}) do
-    vim.api.nvim_buf_set_extmark(buffer, namespace, target.row - 1, 0, {
-      strict = false,
-    })
-  end
+    for _, highlight in ipairs(output.highlights or {}) do
+      vim.api.nvim_buf_set_extmark(buffer, namespace, highlight.row - 1, 0, {
+        end_row = highlight.row,
+        hl_group = highlight.group,
+        hl_eol = true,
+        strict = false,
+      })
+    end
+    for _, target in ipairs(output.targets or {}) do
+      vim.api.nvim_buf_set_extmark(buffer, namespace, target.row - 1, 0, {
+        strict = false,
+      })
+    end
 
-  targets[buffer] = output.targets or {}
-  vim.bo[buffer].modifiable = false
+    targets[buffer] = output.targets or {}
+  end, debug.traceback)
+  if valid_buffer(buffer) then
+    vim.bo[buffer].modifiable = false
+  end
+  if not ok then
+    error(message, 0)
+  end
 end
 
 function M.render(session)
@@ -85,8 +93,12 @@ function M.file_targets(session)
 end
 
 function M.clear(session)
-  targets[session.owned.diff_buf] = nil
-  targets[session.owned.changes_buf] = nil
+  if session.owned.diff_buf then
+    targets[session.owned.diff_buf] = nil
+  end
+  if session.owned.changes_buf then
+    targets[session.owned.changes_buf] = nil
+  end
 end
 
 return M

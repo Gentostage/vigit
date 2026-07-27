@@ -21,6 +21,15 @@ it("rejects unknown and invalid options with a full path", function()
   assert_truthy(invalid.error.message:match("ui%.changes_width"))
 end)
 
+it("rejects a fractional changes width", function()
+  local result = config.resolve({ ui = { changes_width = 31.5 } })
+
+  assert_equal(result.ok, false)
+  assert_equal(result.error.code, "invalid_config")
+  assert_truthy(result.error.message:match("ui%.changes_width"))
+  assert_truthy(result.error.message:match("integer"))
+end)
+
 it("keeps a resolved snapshot isolated from callers", function()
   local setup = config.setup({ ui = { changes_width = 28 } })
   assert_truthy(setup.ok)
