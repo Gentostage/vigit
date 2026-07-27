@@ -1,0 +1,38 @@
+package.path = "./lua/?.lua;./lua/?/init.lua;" .. package.path
+
+local tests = {}
+local failed = 0
+
+_G.it = function(name, fn)
+  tests[#tests + 1] = { name = name, fn = fn }
+end
+
+_G.assert_equal = function(actual, expected)
+  if actual ~= expected then
+    error(string.format("expected %s, got %s", vim.inspect(expected), vim.inspect(actual)), 2)
+  end
+end
+
+_G.assert_truthy = function(value)
+  if not value then
+    error("expected truthy value", 2)
+  end
+end
+
+local files = #arg > 0 and arg or { "tests/headless/sessions_spec.lua" }
+for _, file in ipairs(files) do
+  dofile(file)
+end
+
+for _, test in ipairs(tests) do
+  local ok, message = xpcall(test.fn, debug.traceback)
+  if ok then
+    io.stdout:write("PASS " .. test.name .. "\n")
+  else
+    failed = failed + 1
+    io.stdout:write("FAIL " .. test.name .. "\n" .. message .. "\n")
+  end
+  io.stdout:flush()
+end
+
+vim.cmd(failed == 0 and "qa!" or "cquit " .. failed)

@@ -13,6 +13,13 @@ function M.setup()
   vim.api.nvim_create_user_command("Vigit", function()
     require("vigit.ui").open()
   end, { force = true, desc = "Open Vigit for the current worktree" })
+  vim.api.nvim_create_user_command("VigitV2", function(opts)
+    require("vigit.v2").open({ cwd = opts.args ~= "" and opts.args or nil })
+  end, {
+    nargs = "?",
+    complete = "dir",
+    force = true,
+  })
   vim.api.nvim_create_user_command("VigitWorktrees", function()
     local ui = require("vigit.ui")
     local session = ui.active_session()
