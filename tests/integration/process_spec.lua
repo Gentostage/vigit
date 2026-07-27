@@ -18,11 +18,11 @@ it("rejects a shell string before spawning", function(done)
 end)
 
 it("returns stderr for a failed process", function(done)
-  process.run({ "git", "rev-parse", "--not-an-option" }, {
+  process.run({ "git", "rev-parse", "--verify", "does-not-exist" }, {
     cwd = fixture.root,
   }, function(result)
     assert_equal(result.error.code, "process_failed")
-    assert_truthy(result.error.details:match("unknown option"))
+    assert_truthy(result.error.details:match("Needed a single revision"))
     done()
   end)
 end)

@@ -3,12 +3,14 @@ package.path = "./lua/?.lua;./lua/?/init.lua;" .. package.path
 local tests = {}
 local failed = 0
 local fixture_root = vim.fn.tempname()
+local finished = false
 
 local function print_result(prefix, name, message)
-  print(prefix .. " " .. name)
+  io.stdout:write(prefix .. " " .. name .. "\n")
   if message then
-    print(message)
+    io.stdout:write(message .. "\n")
   end
+  io.stdout:flush()
 end
 
 _G.fixture = { root = fixture_root }
@@ -28,7 +30,7 @@ end
 
 local function finish()
   vim.fn.delete(fixture_root, "rf")
-  vim.cmd(failed == 0 and "qa" or "cquit")
+  finished = true
 end
 
 local function run_test(index)
@@ -42,6 +44,8 @@ local function run_test(index)
   local timer = vim.uv.new_timer()
   local function complete(ok, err)
     if completed then
+      failed = failed + 1
+      print_result("FAIL", test.name, "done callback called more than once")
       return
     end
     completed = true
@@ -81,3 +85,15 @@ for _, file in ipairs(arg) do
 end
 
 run_test(1)
+
+local completed = vim.wait(#tests * 2000 + 100, function()
+  return finished
+end, 10)
+
+if not completed then
+  failed = failed + 1
+  print_result("FAIL", "integration runner", "did not finish all tests")
+  vim.fn.delete(fixture_root, "rf")
+end
+
+vim.cmd(failed == 0 and "qa!" or "cquit " .. failed)
