@@ -20,7 +20,7 @@ local function split_nul(raw)
   return records
 end
 
-local function change(section, status, path, old_path)
+local function change(section, status, path, old_path, unmerged)
   local value = {
     id = section .. "\0" .. path,
     section = section,
@@ -30,18 +30,39 @@ local function change(section, status, path, old_path)
   if old_path then
     value.old_path = old_path
   end
+  if unmerged then
+    value.unmerged = true
+  end
   return value
 end
 
-local function add_changes(parsed, xy, path, old_path)
+local function rename_source(status, old_path)
+  if status == "R" or status == "C" then
+    return old_path
+  end
+end
+
+local function add_changes(parsed, xy, path, old_path, unmerged)
   local index_status = xy:sub(1, 1)
   local worktree_status = xy:sub(2, 2)
 
   if index_status ~= "." then
-    parsed.staged[#parsed.staged + 1] = change("staged", index_status, path, old_path)
+    parsed.staged[#parsed.staged + 1] = change(
+      "staged",
+      index_status,
+      path,
+      rename_source(index_status, old_path),
+      unmerged
+    )
   end
   if worktree_status ~= "." then
-    parsed.unstaged[#parsed.unstaged + 1] = change("unstaged", worktree_status, path, old_path)
+    parsed.unstaged[#parsed.unstaged + 1] = change(
+      "unstaged",
+      worktree_status,
+      path,
+      rename_source(worktree_status, old_path),
+      unmerged
+    )
   end
 end
 
@@ -121,7 +142,7 @@ function M.parse(raw)
       if not xy or path == "" then
         return malformed(record)
       end
-      add_changes(parsed, xy, path)
+      add_changes(parsed, xy, path, nil, true)
       index = index + 1
     elseif record:sub(1, 2) == "? " then
       local path = record:sub(3)

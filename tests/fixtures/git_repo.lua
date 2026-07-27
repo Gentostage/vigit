@@ -37,6 +37,18 @@ function Fixture:write(path, lines)
   end
 end
 
+function Fixture:symlink(target, path)
+  local parent = vim.fs.dirname(self.root .. "/" .. path)
+  run({ "mkdir", "-p", parent }, { text = false })
+  run({ "ln", "-s", "--", target, self.root .. "/" .. path }, { text = false })
+end
+
+function Fixture:mkfifo(path)
+  local parent = vim.fs.dirname(self.root .. "/" .. path)
+  run({ "mkdir", "-p", parent }, { text = false })
+  run({ "mkfifo", "--", self.root .. "/" .. path }, { text = false })
+end
+
 function Fixture:git(args)
   local command = { "git" }
   vim.list_extend(command, args)

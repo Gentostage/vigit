@@ -57,6 +57,25 @@ it("consumes the NUL field after a rename as old_path", function()
   assert_equal(result.value.staged[2].path, "--leading-dash.lua")
 end)
 
+it("keeps rename old_path only on the renamed side of a type-2 record", function()
+  local raw = table.concat({
+    "2 RM N... 100644 100644 100644 aaaa bbbb R100 new/name.lua",
+    "old/name.lua",
+    "",
+  }, "\0")
+
+  local result = status.parse(raw)
+
+  assert_truthy(result.ok)
+  assert_equal(result.value.staged[1].old_path, "old/name.lua")
+  assert_equal(result.value.unstaged[1], {
+    id = "unstaged\0new/name.lua",
+    section = "unstaged",
+    status = "M",
+    path = "new/name.lua",
+  })
+end)
+
 it("emits both entries when index and worktree states differ", function()
   local raw = "1 MM N... 100644 100644 100644 aaaa bbbb src/both.lua\0"
 
@@ -95,6 +114,23 @@ it("parses unmerged records with all three stage hashes", function()
   assert_equal(result.value.staged[1].status, "U")
   assert_equal(result.value.unstaged[1].status, "U")
   assert_equal(result.value.unstaged[1].path, "conflict.lua")
+  assert_equal(result.value.staged[1].unmerged, true)
+  assert_equal(result.value.unstaged[1].unmerged, true)
+end)
+
+it("marks asymmetric unmerged status letters as conflicts", function()
+  local raw = table.concat({
+    "u AU N... 000000 100644 100644 100644 0000 aaaa bbbb conflict.lua",
+    "",
+  }, "\0")
+
+  local result = status.parse(raw)
+
+  assert_truthy(result.ok)
+  assert_equal(result.value.staged[1].status, "A")
+  assert_equal(result.value.staged[1].unmerged, true)
+  assert_equal(result.value.unstaged[1].status, "U")
+  assert_equal(result.value.unstaged[1].unmerged, true)
 end)
 
 it("rejects malformed ordinary and rename records", function()

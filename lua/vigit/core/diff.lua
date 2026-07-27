@@ -55,7 +55,15 @@ function M.parse(raw, change)
   local new_line
 
   for _, line in ipairs(split_lines(raw)) do
-    if line:sub(1, 3) == "@@ " then
+    if line:match("^diff %-%-cc ")
+        or line:match("^diff %-%-combined ")
+        or line:sub(1, 4) == "@@@ " then
+      return Result.err(
+        "unsupported_combined_diff",
+        "Combined conflict diffs are not supported",
+        line
+      )
+    elseif line:sub(1, 3) == "@@ " then
       finish_hunk(hunk)
       local range = parse_hunk_header(line)
       if not range then

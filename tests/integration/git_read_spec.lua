@@ -52,6 +52,33 @@ it("reads rename, delete and Unicode untracked paths", function(done)
   end)
 end)
 
+it("reads the new index path for an unstaged edit after a staged rename", function(done)
+  local repo = git_repo.new()
+  repo:write("old name.txt", { "base" })
+  repo:git({ "add", "--", "old name.txt" })
+  repo:commit("base")
+  repo:git({ "mv", "old name.txt", "new name.txt" })
+  repo:write("new name.txt", { "modified" })
+  local git = git_cli.new(process)
+
+  git:status(repo.root, function(status_result)
+    local staged = find_change(status_result.value.staged, "new name.txt")
+    local unstaged = find_change(status_result.value.unstaged, "new name.txt")
+    assert_equal(staged.old_path, "old name.txt")
+    assert_equal(unstaged.old_path, nil)
+
+    git:snapshot(repo.root, unstaged, "old", function(old_result)
+      git:snapshot(repo.root, unstaged, "new", function(new_result)
+        assert_truthy(old_result.ok)
+        assert_equal(old_result.value, "base\n")
+        assert_equal(new_result.value, "modified\n")
+        repo:cleanup()
+        done()
+      end)
+    end)
+  end)
+end)
+
 it("reads diffs and snapshots for staged and unstaged changes", function(done)
   local repo = git_repo.new()
   repo:write("both.txt", { "base" })
@@ -118,6 +145,26 @@ it("supports an unborn HEAD and staged snapshots", function(done)
   end)
 end)
 
+it("rejects conflict snapshots before ordinary add/delete fast paths", function(done)
+  local fake_process = {
+    run = function()
+      error("conflict snapshot must not invoke an ordinary Git read")
+    end,
+  }
+  local change = {
+    id = "staged\0conflict.lua",
+    section = "staged",
+    status = "A",
+    path = "conflict.lua",
+    unmerged = true,
+  }
+
+  git_cli.new(fake_process):snapshot(fixture.root, change, "old", function(result)
+    assert_equal(result.error.code, "unsupported_conflict_snapshot")
+    done()
+  end)
+end)
+
 it("creates a synthetic diff and snapshots for an untracked file", function(done)
   local repo = git_repo.new()
   repo:write("notes/новый file.md", { "one", "+two" })
@@ -139,6 +186,46 @@ it("creates a synthetic diff and snapshots for an untracked file", function(done
         end)
       end)
     end)
+  end)
+end)
+
+it("reads a symlink target without following it outside the root", function(done)
+  local repo = git_repo.new()
+  local target = "../../definitely-outside-vigit-root"
+  repo:symlink(target, "escape link")
+  local git = git_cli.new(process)
+
+  git:status(repo.root, function(status_result)
+    local change = find_change(status_result.value.unstaged, "escape link")
+    git:diff(repo.root, change, 3, 1024 * 1024, function(diff_result)
+      assert_truthy(diff_result.ok)
+      assert_equal(diff_result.value.hunks[1].lines[1].text, target)
+
+      git:snapshot(repo.root, change, "new", function(snapshot_result)
+        assert_truthy(snapshot_result.ok)
+        assert_equal(snapshot_result.value, target)
+        repo:cleanup()
+        done()
+      end)
+    end)
+  end)
+end)
+
+it("rejects unsupported worktree file types without opening them", function(done)
+  local repo = git_repo.new()
+  repo:mkfifo("named-pipe")
+  local change = {
+    id = "unstaged\0named-pipe",
+    section = "unstaged",
+    status = "?",
+    path = "named-pipe",
+  }
+
+  git_cli.new(process):diff(repo.root, change, 3, 1024, function(result)
+    assert_equal(result.error.code, "git_diff_failed")
+    assert_truthy(result.error.details:match("Unsupported file type"))
+    repo:cleanup()
+    done()
   end)
 end)
 
@@ -197,12 +284,18 @@ it("uses argument arrays for staged and unstaged diff reads", function(done)
 
   git:diff("/repo", staged, 5, 1024, function()
     git:diff("/repo", unstaged, 5, 1024, function()
-      assert_equal(calls[1].args, {
-        "git", "diff", "--cached", "--no-ext-diff", "--unified=5", "--", "name.txt",
-      })
-      assert_equal(calls[2].args, {
-        "git", "diff", "--no-ext-diff", "--unified=5", "--", "name.txt",
-      })
+      assert_equal(
+        table.concat(calls[1].args, "\0"),
+        table.concat({
+          "git", "diff", "--cached", "--no-ext-diff", "--unified=5", "--", "name.txt",
+        }, "\0")
+      )
+      assert_equal(
+        table.concat(calls[2].args, "\0"),
+        table.concat({
+          "git", "diff", "--no-ext-diff", "--unified=5", "--", "name.txt",
+        }, "\0")
+      )
       assert_equal(calls[1].opts.cwd, "/repo")
       done()
     end)

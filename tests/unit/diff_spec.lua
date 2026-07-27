@@ -111,6 +111,27 @@ it("detects binary patches without fabricating hunks", function()
   assert_equal(#parsed.value.hunks, 0)
 end)
 
+it("rejects combined conflict hunks instead of returning an empty diff", function()
+  local parsed = diff.parse(table.concat({
+    "diff --cc conflict.lua",
+    "index 1111111,2222222..3333333",
+    "--- a/conflict.lua",
+    "+++ b/conflict.lua",
+    "@@@ -1,1 -1,1 +1,1 @@@",
+    "- -ours",
+    " +theirs",
+    "",
+  }, "\n"), {
+    id = "unstaged\0conflict.lua",
+    section = "unstaged",
+    status = "U",
+    path = "conflict.lua",
+    unmerged = true,
+  })
+
+  assert_equal(parsed.error.code, "unsupported_combined_diff")
+end)
+
 it("rejects malformed hunk headers", function()
   local parsed = diff.parse(table.concat({
     "diff --git a/src/a.lua b/src/a.lua",

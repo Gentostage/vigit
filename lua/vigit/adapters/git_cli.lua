@@ -17,45 +17,69 @@ end
 local function read_file(path, callback)
   local cancelled = false
 
-  vim.uv.fs_open(path, "r", 438, function(open_error, descriptor)
+  local function complete(result)
     if cancelled then
-      if descriptor then
-        vim.uv.fs_close(descriptor)
-      end
       return
     end
-    if open_error then
-      vim.schedule(function()
-        callback(Result.err("file_read_failed", "Unable to open file", open_error))
+    vim.schedule(function()
+      if cancelled then
+        return
+      end
+      callback(result)
+    end)
+  end
+
+  vim.uv.fs_lstat(path, function(lstat_error, stat)
+    if cancelled then
+      return
+    end
+    if lstat_error then
+      complete(Result.err("file_read_failed", "Unable to inspect file", lstat_error))
+      return
+    end
+
+    if stat.type == "link" then
+      vim.uv.fs_readlink(path, function(readlink_error, target)
+        if readlink_error then
+          complete(Result.err(
+            "file_read_failed",
+            "Unable to read symbolic link",
+            readlink_error
+          ))
+        else
+          complete(Result.ok(target))
+        end
       end)
       return
     end
 
-    vim.uv.fs_fstat(descriptor, function(stat_error, stat)
+    if stat.type ~= "file" then
+      complete(Result.err(
+        "unsupported_file_type",
+        "Unsupported file type: " .. tostring(stat.type)
+      ))
+      return
+    end
+
+    vim.uv.fs_open(path, "r", 438, function(open_error, descriptor)
       if cancelled then
-        vim.uv.fs_close(descriptor)
+        if descriptor then
+          vim.uv.fs_close(descriptor)
+        end
         return
       end
-      if stat_error then
-        vim.uv.fs_close(descriptor)
-        vim.schedule(function()
-          callback(Result.err("file_read_failed", "Unable to inspect file", stat_error))
-        end)
+      if open_error then
+        complete(Result.err("file_read_failed", "Unable to open file", open_error))
         return
       end
 
       vim.uv.fs_read(descriptor, stat.size, 0, function(read_error, data)
         vim.uv.fs_close(descriptor)
-        if cancelled then
-          return
+        if read_error then
+          complete(Result.err("file_read_failed", "Unable to read file", read_error))
+        else
+          complete(Result.ok(data or ""))
         end
-        vim.schedule(function()
-          if read_error then
-            callback(Result.err("file_read_failed", "Unable to read file", read_error))
-          else
-            callback(Result.ok(data or ""))
-          end
-        end)
       end)
     end)
   end)
@@ -225,6 +249,16 @@ function Git:snapshot(root, change, side, callback)
     return async_result(
       callback,
       Result.err("invalid_snapshot_side", "Snapshot side must be old or new")
+    )
+  end
+
+  if change.unmerged then
+    return async_result(
+      callback,
+      Result.err(
+        "unsupported_conflict_snapshot",
+        "Conflict snapshots are not supported"
+      )
     )
   end
 
