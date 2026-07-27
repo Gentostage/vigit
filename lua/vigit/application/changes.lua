@@ -19,6 +19,16 @@ local function change_for(status, change_id)
   return nil
 end
 
+local function clear_pending_diffs(session)
+  session.busy.diff = {}
+  session.view.all_files.loading = {}
+  for key in pairs(session.reads.jobs) do
+    if key:sub(1, 5) == "diff:" then
+      session.reads.jobs[key] = nil
+    end
+  end
+end
+
 function M.new(opts)
   return setmetatable({
     git = assert(opts.git),
@@ -45,24 +55,28 @@ function Changes:load_diff(session, change_id, generation)
   end
 
   generation = generation or session.reads.generation
+  local job_key = "diff:" .. change_id
+  local request = {}
   session.busy.diff = session.busy.diff or {}
   session.busy.diff[change_id] = true
   session.view.all_files.loading[change_id] = true
+  session.reads.jobs[job_key] = request
   self:notify(session)
 
   local ui = config.get().ui
-  session.reads.jobs["diff:" .. change_id] = self.git:diff(
+  local handle = self.git:diff(
     session.root,
     change,
     ui.context_lines,
     ui.max_diff_bytes,
     function(result)
-      if not self:current(session, generation) then
+      if not self:current(session, generation) or session.reads.jobs[job_key] ~= request then
         return
       end
 
       session.busy.diff[change_id] = nil
       session.view.all_files.loading[change_id] = nil
+      session.reads.jobs[job_key] = nil
       if result.ok then
         session.data.diffs[change_id] = result.value
         session.view.all_files.loaded[change_id] = true
@@ -73,6 +87,9 @@ function Changes:load_diff(session, change_id, generation)
       self:notify(session)
     end
   )
+  if session.reads.jobs[job_key] == request then
+    request.handle = handle
+  end
 end
 
 function Changes:refresh(session)
@@ -80,6 +97,7 @@ function Changes:refresh(session)
     return
   end
 
+  clear_pending_diffs(session)
   session.reads.generation = session.reads.generation + 1
   local generation = session.reads.generation
   session.busy.status = true
@@ -97,9 +115,11 @@ function Changes:refresh(session)
       session.view.all_files.loaded = {}
       session.view.all_files.loading = {}
       session.error = nil
-      if session.view.selected_change_id then
-        self:load_diff(session, session.view.selected_change_id, generation)
+      local selected_change_id = session.view.selected_change_id
+      if selected_change_id and change_for(session.data.status, selected_change_id) then
+        self:load_diff(session, selected_change_id, generation)
       else
+        session.view.selected_change_id = nil
         self:notify(session)
       end
     else
