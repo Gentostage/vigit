@@ -21,6 +21,7 @@ function M.new(opts)
       anchor = nil,
       expanded_dirs = {},
       expanded_context = {},
+      applied_expanded_context = {},
       all_files = {
         loaded = {},
         loading = {},

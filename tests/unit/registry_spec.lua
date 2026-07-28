@@ -42,3 +42,16 @@ it("удаляет только сессию с переданным ID", functi
   assert_equal(registry:get("/repo/b"), b)
   assert_equal(registry:all(), { b })
 end)
+
+it("изолирует desired и applied context snapshots между сессиями", function()
+  local a = Session.new({ id = "a", root = "/repo/a" })
+  local b = Session.new({ id = "b", root = "/repo/b" })
+
+  a.view.expanded_context.h1 = true
+  a.view.applied_expanded_context.h2 = true
+
+  assert_equal(next(b.view.expanded_context), nil)
+  assert_equal(next(b.view.applied_expanded_context), nil)
+  assert_truthy(a.view.expanded_context ~= a.view.applied_expanded_context)
+  assert_truthy(a.view.applied_expanded_context ~= b.view.applied_expanded_context)
+end)

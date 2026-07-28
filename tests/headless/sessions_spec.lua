@@ -112,11 +112,26 @@ it("owns one isolated review tab and two nofile buffers per canonical root", fun
     assert_equal(vim.fn.getcwd(0, 0), original_cwd)
 
     vim.api.nvim_set_current_win(a.owned.changes_win)
-    for _, lhs in ipairs({ "<Tab>", "<CR>", "]f", "[f", "a", "t", "r", "q" }) do
+    for _, lhs in ipairs({
+      "<Tab>",
+      "<CR>",
+      "]f",
+      "e",
+      "gd",
+      "T",
+      "[f",
+      "a",
+      "t",
+      "r",
+      "q",
+    }) do
       assert_equal(vim.fn.maparg(lhs, "n", false, true).buffer, 1)
     end
+    assert_equal(next(vim.fn.maparg("f", "n", false, true)), nil)
     vim.api.nvim_set_current_win(a.owned.diff_win)
-    assert_equal(vim.fn.maparg("q", "n", false, true).buffer, 1)
+    for _, lhs in ipairs({ "e", "gd", "T", "f", "q" }) do
+      assert_equal(vim.fn.maparg(lhs, "n", false, true).buffer, 1)
+    end
     vim.api.nvim_feedkeys("q", "x", false)
     assert_truthy(vim.wait(1000, function()
       return a.closed
@@ -562,6 +577,184 @@ it("returns file hit targets and marker-free view models", function()
   assert_equal(diff.lines[hunk_row + 3], long_line)
 end)
 
+it("keeps loaded code visible during refresh and renders typed file placeholders", function()
+  local change = {
+    id = "unstaged\0src/service.py",
+    section = "unstaged",
+    status = "M",
+    path = "src/service.py",
+  }
+  local diff = {
+    id = change.id,
+    path = change.path,
+    section = change.section,
+    status = change.status,
+    headers = {},
+    hunks = {
+      {
+        header = "@@ -90 +90 @@",
+        old_start = 90,
+        old_count = 1,
+        new_start = 90,
+        new_count = 1,
+        lines = {
+          { kind = "delete", text = "value = \"old\"", old_line = 90 },
+          { kind = "add", text = "value = \"new\"", new_line = 90 },
+        },
+      },
+    },
+  }
+  local state = {
+    view = {
+      diff_mode = "one_file",
+      selected_change_id = change.id,
+      all_files = { loaded = {}, loading = {} },
+    },
+    data = {
+      status = {
+        staged = {},
+        unstaged = { change },
+      },
+      diffs = {
+        [change.id] = diff,
+      },
+    },
+    busy = {
+      status = true,
+      diff = {
+        [change.id] = true,
+      },
+    },
+    errors = {
+      diffs = {},
+    },
+  }
+
+  local loading = diff_view.render(state, 100)
+  assert_truthy(vim.tbl_contains(loading.lines, "Refreshing changes…"))
+  assert_truthy(vim.tbl_contains(loading.lines, "Loading diff…"))
+  assert_truthy(vim.tbl_contains(loading.lines, "value = \"old\""))
+  assert_truthy(vim.tbl_contains(loading.lines, "value = \"new\""))
+
+  state.busy.status = nil
+  state.busy.diff[change.id] = nil
+  state.errors.diffs[change.id] = {
+    code = "diff_too_large",
+    message = "Diff exceeds configured byte limit",
+  }
+  state.error = state.errors.diffs[change.id]
+
+  local oversized = diff_view.render(state, 100)
+  assert_equal(#oversized.lines, 2)
+  assert_truthy(oversized.lines[2]:find("diff_too_large", 1, true))
+  assert_truthy(oversized.lines[2]:find("Press e", 1, true))
+  assert_equal(oversized.rows[2].kind, "file_placeholder")
+  assert_equal(oversized.rows[2].path, change.path)
+  assert_equal(oversized.rows[2].source_line, 1)
+  assert_equal(oversized.rows[2].source_anchor.source_line, 1)
+  assert_equal(oversized.rows[2].hunk_id, nil)
+  assert_equal(vim.tbl_contains(oversized.lines, "value = \"old\""), false)
+  assert_equal(vim.tbl_contains(oversized.lines, "value = \"new\""), false)
+end)
+
+it("renders a typed status failure in every diff mode without hiding retained rows", function()
+  local change = {
+    id = "unstaged\0src/service.py",
+    section = "unstaged",
+    status = "M",
+    path = "src/service.py",
+  }
+  local status_error = {
+    code = "git_status_failed",
+    message = "Git status failed",
+  }
+  local stale_error = {
+    code = "stale_error",
+    message = "Must not be rendered",
+  }
+  local state = {
+    view = {
+      diff_mode = "all_files",
+      selected_change_id = change.id,
+      all_files = { loaded = {}, loading = {} },
+    },
+    data = {
+      status = {
+        staged = {},
+        unstaged = { change },
+      },
+      diffs = {
+        [change.id] = {
+          id = change.id,
+          path = change.path,
+          section = change.section,
+          status = change.status,
+          headers = {},
+          hunks = {
+            {
+              header = "@@ -1 +1 @@",
+              old_start = 1,
+              old_count = 1,
+              new_start = 1,
+              new_count = 1,
+              lines = {
+                { kind = "delete", text = "value = \"old\"", old_line = 1 },
+                { kind = "add", text = "value = \"new\"", new_line = 1 },
+              },
+            },
+          },
+        },
+      },
+    },
+    busy = { diff = {} },
+    errors = {
+      status = status_error,
+      diffs = {},
+    },
+    error = stale_error,
+  }
+
+  local all_files = diff_view.render(state, 100)
+  assert_truthy(vim.tbl_contains(
+    all_files.lines,
+    "Error [git_status_failed]: Git status failed"
+  ))
+  assert_truthy(vim.tbl_contains(all_files.lines, "value = \"old\""))
+  assert_truthy(vim.tbl_contains(all_files.lines, "value = \"new\""))
+  assert_equal(vim.tbl_contains(
+    all_files.lines,
+    "Error [stale_error]: Must not be rendered"
+  ), false)
+
+  state.view.diff_mode = "one_file"
+  state.view.selected_change_id = "unstaged\0missing.py"
+  local no_selection = diff_view.render(state, 100)
+  assert_truthy(vim.tbl_contains(
+    no_selection.lines,
+    "Error [git_status_failed]: Git status failed"
+  ))
+  assert_truthy(vim.tbl_contains(no_selection.lines, "Select a change"))
+
+  state.data.status = {
+    staged = {},
+    unstaged = {},
+  }
+  local empty = diff_view.render(state, 100)
+  assert_truthy(vim.tbl_contains(
+    empty.lines,
+    "Error [git_status_failed]: Git status failed"
+  ))
+  assert_truthy(vim.tbl_contains(empty.lines, "No changes"))
+
+  state.data.status = nil
+  state.error = status_error
+  local initial = diff_view.render(state, 100)
+  assert_equal(
+    initial.lines[1],
+    "Error [git_status_failed]: Git status failed"
+  )
+end)
+
 it("escapes control characters for display and preserves raw hit targets", function()
   local path = "dir/odd\nname\t" .. string.char(1) .. ".lua"
   local change = {
@@ -766,7 +959,20 @@ it("clears stale hit targets after a partial renderer failure", function()
 end)
 
 it("publishes the basic normal-mode key registry", function()
-  local expected = { "<Tab>", "<CR>", "]f", "[f", "a", "t", "r", "q" }
+  local expected = {
+    "<Tab>",
+    "<CR>",
+    "]f",
+    "e",
+    "gd",
+    "T",
+    "f",
+    "[f",
+    "a",
+    "t",
+    "r",
+    "q",
+  }
   assert_equal(#keymaps.entries, #expected)
   for index, entry in ipairs(keymaps.entries) do
     assert_equal(entry.lhs, expected[index])

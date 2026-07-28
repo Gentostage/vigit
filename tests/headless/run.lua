@@ -19,9 +19,23 @@ _G.assert_truthy = function(value)
   end
 end
 
-local files = #arg > 0 and arg or { "tests/headless/sessions_spec.lua" }
+local using_default_files = #arg == 0
+local files = #arg > 0 and arg or {
+  "tests/headless/sessions_spec.lua",
+  "tests/headless/syntax_spec.lua",
+  "tests/headless/handoff_spec.lua",
+  "tests/headless/native_flow_spec.lua",
+}
 for _, file in ipairs(files) do
   dofile(file)
+end
+
+assert(#tests > 0, "headless test runner loaded zero tests")
+if using_default_files then
+  assert(
+    #tests == 45,
+    string.format("expected 45 default headless tests, loaded %d", #tests)
+  )
 end
 
 for _, test in ipairs(tests) do

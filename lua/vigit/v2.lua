@@ -70,6 +70,10 @@ changes = Changes.new({
 controller.configure({
   changes = changes,
   registry = registry,
+  config = config,
+  open_file = neovim.open_file,
+  goto_definition = neovim.goto_definition,
+  open_terminal = neovim.open_terminal,
 })
 
 local function current_path()
