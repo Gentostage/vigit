@@ -140,3 +140,27 @@ it("возвращает заголовок файла как последний
 
   assert_equal(anchor.match(rows, source({ context = "missing" })), 1)
 end)
+
+it("не переносит old-side комментарий на new-side строку в строгом режиме", function()
+  local target = source({
+    side = "old",
+    source_line = 9,
+    context = "removed value",
+  })
+  local rows = {
+    row("add", source({
+      side = "new",
+      source_line = 9,
+      context = "replacement value",
+    })),
+    row("file_header", source({
+      side = nil,
+      source_line = nil,
+      context = nil,
+      hunk_id = nil,
+    })),
+  }
+
+  assert_equal(anchor.match(rows, target), 1)
+  assert_equal(anchor.match(rows, target, { strict_side = true }), nil)
+end)

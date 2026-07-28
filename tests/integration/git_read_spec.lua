@@ -583,13 +583,13 @@ it("uses argument arrays for staged and unstaged diff reads", function(done)
       assert_equal(
         table.concat(calls[1].args, "\0"),
         table.concat({
-          "git", "diff", "--cached", "--no-ext-diff", "--unified=5", "--", "name.txt",
+          "git", "--literal-pathspecs", "diff", "--cached", "--no-ext-diff", "--full-index", "--unified=5", "--", "name.txt",
         }, "\0")
       )
       assert_equal(
         table.concat(calls[2].args, "\0"),
         table.concat({
-          "git", "diff", "--no-ext-diff", "--unified=5", "--", "name.txt",
+          "git", "--literal-pathspecs", "diff", "--no-ext-diff", "--full-index", "--unified=5", "--", "name.txt",
         }, "\0")
       )
       assert_equal(calls[1].opts.cwd, "/repo")

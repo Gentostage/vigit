@@ -1,5 +1,6 @@
 local anchor = require("vigit.core.anchor")
 local config = require("vigit.config")
+local ErrorState = require("vigit.application.error_state")
 
 local M = {}
 local EXPANDED_CONTEXT_LINES = 9999
@@ -45,25 +46,12 @@ local function ensure_errors(session)
 end
 
 local function expose_error(session)
-  local errors = ensure_errors(session)
-  if errors.status then
-    session.error = errors.status
-    return
-  end
+  ensure_errors(session)
+  ErrorState.resolve(session)
+end
 
-  local selected = session.view.selected_change_id
-  if selected and errors.diffs[selected] then
-    session.error = errors.diffs[selected]
-    return
-  end
-
-  local first_id
-  for change_id in pairs(errors.diffs) do
-    if not first_id or change_id < first_id then
-      first_id = change_id
-    end
-  end
-  session.error = first_id and errors.diffs[first_id] or nil
+function M.expose_error(session)
+  expose_error(session)
 end
 
 local function clear_pending_diffs(session)

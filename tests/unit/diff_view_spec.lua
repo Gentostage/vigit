@@ -156,6 +156,43 @@ local function find_source_row(rendered, source_line)
   end
 end
 
+it("renders the already-resolved comments error ahead of a handler error", function()
+  with_vim(function()
+    local state = state_with(empty_diff())
+    state.errors = {
+      comments = { code = "comments_failed", message = "Comments failed" },
+      handler = { code = "handler_failed", message = "Handler failed" },
+      diffs = {},
+    }
+    state.error = state.errors.comments
+
+    local rendered = diff_view.render(state, 80)
+
+    assert_truthy(rendered.lines[1]:find("comments_failed", 1, true) ~= nil)
+    assert_equal(rendered.lines[1]:find("handler_failed", 1, true), nil)
+  end)
+end)
+
+it("renders status and selected diff errors only through resolved state.error", function()
+  with_vim(function()
+    local state = state_with(empty_diff())
+    state.errors = {
+      status = { code = "status_failed", message = "Status failed" },
+      comments = { code = "comments_failed", message = "Comments failed" },
+      handler = { code = "handler_failed", message = "Handler failed" },
+      diffs = { [change.id] = { code = "diff_failed", message = "Diff failed" } },
+    }
+    state.error = state.errors.status
+    local rendered = diff_view.render(state, 80)
+    assert_truthy(rendered.lines[1]:find("status_failed", 1, true) ~= nil)
+
+    state.errors.status = nil
+    state.error = state.errors.diffs[change.id]
+    rendered = diff_view.render(state, 80)
+    assert_truthy(table.concat(rendered.lines, "\n"):find("diff_failed", 1, true) ~= nil)
+  end)
+end)
+
 local function refresh_git()
   local fake = {
     status_callbacks = {},

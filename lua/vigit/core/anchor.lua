@@ -335,12 +335,13 @@ function M.reconcile_logical_keys(
   return result
 end
 
-function M.match(rows, source_anchor)
+function M.match(rows, source_anchor, opts)
   if type(rows) ~= "table" or type(source_anchor) ~= "table" then
     return nil
   end
 
   local target = M.from_row(source_anchor, source_anchor.column)
+  local strict_side = opts and opts.strict_side == true
   if type(target.source_line) == "number" then
     for index, row in ipairs(rows) do
       local candidate = row_anchor(row)
@@ -357,6 +358,7 @@ function M.match(rows, source_anchor)
     for index, row in ipairs(rows) do
       local candidate = row_anchor(row)
       if same_file(candidate, target)
+          and (not strict_side or candidate.side == target.side)
           and normalize_context(candidate.context) == target_context then
         return index
       end
@@ -366,6 +368,7 @@ function M.match(rows, source_anchor)
   if target.hunk_id then
     local hunk_row = nearest(rows, target, function(candidate)
       return same_file(candidate, target)
+        and (not strict_side or candidate.side == target.side)
         and candidate.hunk_id == target.hunk_id
     end)
     if hunk_row then
@@ -375,6 +378,7 @@ function M.match(rows, source_anchor)
 
   local file_row = nearest(rows, target, function(candidate)
     return same_file(candidate, target)
+      and (not strict_side or candidate.side == target.side)
   end)
   if file_row then
     return file_row
@@ -383,6 +387,7 @@ function M.match(rows, source_anchor)
   for index, row in ipairs(rows) do
     local candidate = row_anchor(row)
     if same_file(candidate, target)
+        and (not strict_side or candidate.side == target.side)
         and (row.kind == "file_header" or row.kind == "file")
         and candidate.source_line == nil then
       return index

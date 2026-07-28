@@ -1,8 +1,14 @@
 local anchor = require("vigit.core.anchor")
+local config = require("vigit.config")
 local Result = require("vigit.core.result")
+local Mutations = require("vigit.application.mutations")
+local Changes = require("vigit.application.changes")
+local ErrorState = require("vigit.application.error_state")
+local confirm = require("vigit.ui.confirm")
 local layout = require("vigit.ui.layout")
 local renderer = require("vigit.ui.renderer")
 local diff_view = require("vigit.ui.views.diff")
+local comments_view = require("vigit.ui.views.comments")
 
 local M = {}
 
@@ -15,16 +21,167 @@ local source_target_kinds = {
   delete = true,
   file_placeholder = true,
 }
+local comment_target_kinds = { add = true, context = true, delete = true }
+local open_comments
 
 function M.configure(opts)
+  local previous = context
+  local mutations = opts.mutations or Mutations.new({
+    on_change = function(session)
+      renderer.render(session)
+    end,
+  })
   context = {
     changes = assert(opts.changes),
+    mutations = mutations,
     registry = assert(opts.registry),
     config = opts.config,
     open_file = opts.open_file,
     goto_definition = opts.goto_definition,
     open_terminal = opts.open_terminal,
+    reviews = opts.reviews,
   }
+  return previous
+end
+
+local function review_error(session, error)
+  session.errors = session.errors or {}
+  session.errors.comments = error
+  ErrorState.resolve(session)
+  renderer.render(session)
+end
+
+local function review_changed(session)
+  session.errors = session.errors or {}
+  session.errors.comments = nil
+  ErrorState.resolve(session)
+  renderer.render(session)
+end
+
+local function reviews_for(session)
+  return context.reviews or session.review_service
+end
+
+local function reload_comments(session)
+  local reviews = reviews_for(session)
+  if not reviews then return nil end
+  local result = reviews:load(session)
+  if not result.ok then
+    review_error(session, result.error)
+    return nil
+  end
+  review_changed(session)
+  return result.value
+end
+
+local function comment_anchor(session)
+  local window = session.owned.diff_win
+  if not window or not vim.api.nvim_win_is_valid(window) then return nil end
+  local cursor = vim.api.nvim_win_get_cursor(window)
+  local row = renderer.target_at(session.owned.diff_buf, cursor[1])
+  if not row or not comment_target_kinds[row.kind] or not row.source_line
+      or not row.source_anchor or row.source_anchor.context == nil then return nil end
+  return anchor.from_row(row, cursor[2]), row, cursor[1]
+end
+
+local function comment_by_id(session, id)
+  for _, comment in ipairs(session.data.comments or {}) do
+    if comment.id == id then return comment end
+  end
+end
+
+local function jump_to_comment(session, comment)
+  local window = session.owned.diff_win
+  if not window or not vim.api.nvim_win_is_valid(window) then return end
+  local function jump_rendered()
+    if session.closed then return end
+    local rendered = diff_view.render(session, vim.api.nvim_win_get_width(window))
+    local reviews = reviews_for(session)
+    if not reviews then return false end
+    local row = reviews:nearest_anchor(rendered.rows, comment)
+    if not row then return false end
+    vim.api.nvim_set_current_win(window)
+    vim.api.nvim_win_set_cursor(window, { row, comment.column or 0 })
+    return true
+  end
+  if jump_rendered() then return end
+  local matched
+  for _, section in ipairs({ "staged", "unstaged" }) do
+    for _, change in ipairs(session.data.status and session.data.status[section] or {}) do
+      local path = comment.side == "old" and change.old_path or change.path
+      if path == comment.path and change.section == comment.section then
+        matched = change
+        break
+      end
+    end
+    if matched then break end
+  end
+  if not matched then
+    review_error(session, Result.err("comment_anchor_missing", "Comment anchor is no longer in the Git diff").error)
+    return
+  end
+  session.view.diff_mode = "one_file"
+  session.view.selected_change_id = matched.id
+  context.changes:load_diff(session, matched.id, nil, nil, function(result)
+    if not result.ok or not jump_rendered() then
+      review_error(session, Result.err("comment_anchor_missing", "Comment anchor is no longer in the rendered diff").error)
+    end
+  end)
+end
+
+local function add_or_edit_comment(session)
+  local reviews = reviews_for(session)
+  if not reviews then return end
+  local source_anchor, _, row = comment_anchor(session)
+  if not source_anchor or not source_anchor.path or not source_anchor.source_line then
+    review_error(session, Result.err("comment_anchor_required", "Select a source line in the diff before adding a comment").error)
+    return
+  end
+  local ids = renderer.comment_ids_at(session.owned.diff_buf, row)
+  if #ids > 1 then
+    open_comments(session, ids)
+    return
+  end
+  local existing = ids[1] and comment_by_id(session, ids[1]) or nil
+  comments_view.open_editor(session, reviews, {
+    comment = existing,
+    anchor = source_anchor,
+    changed = function() review_changed(session) end,
+    failed = function(error) review_error(session, error) end,
+  })
+end
+
+open_comments = function(session, focus_ids)
+  local reviews = reviews_for(session)
+  if not reviews then return end
+  comments_view.open(session, reviews, {
+    changed = function() review_changed(session) end,
+    failed = function(error) review_error(session, error) end,
+    select = function(comment) jump_to_comment(session, comment) end,
+    focus_ids = focus_ids,
+  })
+end
+
+local function prepare_prompt(session)
+  local reviews = reviews_for(session)
+  if not reviews then return end
+  local prompt = reviews:prompt(session)
+  if type(prompt) == "table" and prompt.ok == false then
+    review_error(session, prompt.error)
+    return
+  end
+  local copied = vim.fn.has("clipboard") == 1 and pcall(vim.fn.setreg, "+", prompt)
+  if not copied then comments_view.open_prompt(session, prompt) end
+end
+
+local function change_for(session, change_id)
+  for _, section in ipairs({ "staged", "unstaged" }) do
+    for _, change in ipairs(session.data.status and session.data.status[section] or {}) do
+      if change.id == change_id then
+        return change
+      end
+    end
+  end
 end
 
 local function cursor_target(session)
@@ -113,6 +270,394 @@ local function active_target(session)
   end
   local cursor = vim.api.nvim_win_get_cursor(window)
   return renderer.target_at(buffer, cursor[1]), cursor
+end
+
+local function active_change(session)
+  local target = active_target(session)
+  if not target then
+    return nil
+  end
+  return change_for(session, target.change_id)
+end
+
+local function file_target_position(session, change_id)
+  for index, target in ipairs(renderer.file_targets(session)) do
+    if target.change_id == change_id then
+      return index
+    end
+  end
+end
+
+local function file_anchor(session, change)
+  local captured = capture_diff_anchor(session)
+  if captured and captured.change_id == change.id then
+    return captured.source_anchor
+  end
+  return {
+    path = change.path,
+    section = change.section,
+    column = 0,
+  }
+end
+
+local function mutation_error(session, error)
+  session.errors = session.errors or {}
+  session.errors.mutation = error
+  ErrorState.resolve(session)
+  renderer.render(session)
+end
+
+local function refresh_file_mutation(session, path, section, source_anchor, target_position)
+  context.changes:refresh(session, function(event)
+    if session.closed or not event.result.ok or event.phase ~= "status" then
+      return
+    end
+
+    local updated
+    for _, change in ipairs(session.data.status[section] or {}) do
+      if change.path == path then
+        updated = change
+        break
+      end
+    end
+    if not updated then
+      local targets = renderer.file_targets(session)
+      local target = targets[math.min(target_position or 1, #targets)]
+      updated = target and change_for(session, target.change_id) or nil
+    end
+    if not updated then
+      session.view.selected_change_id = nil
+      session.view.anchor = nil
+      renderer.render(session)
+      return
+    end
+
+    session.view.selected_change_id = updated.id
+    local restored_anchor = {}
+    for key, value in pairs(source_anchor) do
+      restored_anchor[key] = value
+    end
+    restored_anchor.path = updated.path
+    restored_anchor.section = updated.section
+    session.view.anchor = restored_anchor
+    context.changes:load_diff(session, updated.id, nil, nil, function()
+      if session.view.anchor == restored_anchor then
+        session.view.anchor = restore_diff_anchor(
+          session,
+          restored_anchor,
+          true
+        ) or restored_anchor
+      end
+    end)
+  end)
+end
+
+local function toggle_file_index(session)
+  if session.busy.mutation then
+    return
+  end
+
+  local change = active_change(session)
+  if not change or (change.section ~= "staged" and change.section ~= "unstaged") then
+    mutation_error(session, Result.err(
+      "stale_change",
+      "File change is missing or stale"
+    ).error)
+    return
+  end
+
+  local method = change.section == "staged" and "unstage_file" or "stage_file"
+  if type(context.changes.git[method]) ~= "function" then
+    mutation_error(session, Result.err(
+      "mutation_unavailable",
+      "File index mutation is unavailable"
+    ).error)
+    return
+  end
+
+  session.mutations = session.mutations or {}
+  session.mutations.toggle_serial = (session.mutations.toggle_serial or 0) + 1
+  local source_anchor = file_anchor(session, change)
+  local target_position = file_target_position(session, change.id)
+  local destination_section = change.section == "staged" and "unstaged" or "staged"
+  context.mutations:enqueue(session, {
+    id = "toggle_file_index:" .. session.mutations.toggle_serial,
+    run = function(done)
+      context.changes.git[method](context.changes.git, session.root, change, done)
+    end,
+    after_success = function()
+      refresh_file_mutation(
+        session,
+        change.path,
+        destination_section,
+        source_anchor,
+        target_position
+      )
+    end,
+  })
+end
+
+local function hunk_for(change, file_diff, hunk_id)
+  if not file_diff or type(hunk_id) ~= "string" then
+    return nil
+  end
+  for _, hunk in ipairs(file_diff.hunks or {}) do
+    if hunk.id == hunk_id then
+      return hunk
+    end
+    for _, cluster in ipairs(anchor.logical_clusters(
+      change,
+      hunk,
+      config.get().ui.context_lines
+    )) do
+      if cluster.key == hunk_id then
+        return hunk
+      end
+    end
+  end
+end
+
+local function change_identity(change)
+  if not change then
+    return nil
+  end
+  return table.concat({
+    change.id or "",
+    change.section or "",
+    change.status or "",
+    change.path or "",
+    change.old_path or "",
+    change.unmerged and "1" or "0",
+  }, "\0")
+end
+
+local function toggle_hunk_index(session)
+  if session.busy.mutation then
+    return
+  end
+
+  local target = active_target(session)
+  local change = target and change_for(session, target.change_id)
+  if not change or not target.hunk_id
+      or (change.section ~= "staged" and change.section ~= "unstaged") then
+    mutation_error(session, Result.err(
+      "stale_hunk",
+      "Selected hunk is missing or stale"
+    ).error)
+    return
+  end
+
+  session.mutations = session.mutations or {}
+  session.mutations.toggle_hunk_serial = (session.mutations.toggle_hunk_serial or 0) + 1
+  local source_anchor = file_anchor(session, change)
+  local target_position = file_target_position(session, change.id)
+  local mutation_path = change.path
+  local destination_section
+  context.mutations:enqueue(session, {
+    id = "toggle_hunk_index:" .. session.mutations.toggle_hunk_serial,
+    run = function(done)
+      local latest_change = change_for(session, target.change_id)
+      if session.closed or not latest_change
+          or (latest_change.section ~= "staged" and latest_change.section ~= "unstaged") then
+        done(Result.err("stale_hunk", "Selected hunk is missing or stale"))
+        return
+      end
+
+      local method = latest_change.section == "staged" and "unstage_hunk" or "stage_hunk"
+      if type(context.changes.git[method]) ~= "function" then
+        done(Result.err("mutation_unavailable", "Hunk index mutation is unavailable"))
+        return
+      end
+
+      local ui = config.get().ui
+      context.changes.git:diff(
+        session.root,
+        latest_change,
+        ui.context_lines,
+        ui.max_diff_bytes,
+        function(diff_result)
+          if session.closed then
+            done(Result.err("stale_hunk", "Selected hunk is missing or stale"))
+            return
+          end
+          if not diff_result.ok then
+            done(diff_result)
+            return
+          end
+          local hunk = hunk_for(latest_change, diff_result.value, target.hunk_id)
+          if not hunk then
+            done(Result.err("stale_hunk", "Selected hunk is missing or stale"))
+            return
+          end
+          destination_section = latest_change.section == "staged" and "unstaged" or "staged"
+          mutation_path = latest_change.path
+          context.changes.git[method](
+            context.changes.git,
+            session.root,
+            diff_result.value,
+            hunk,
+            done
+          )
+        end
+      )
+    end,
+    after_success = function()
+      refresh_file_mutation(
+        session,
+        mutation_path,
+        destination_section,
+        source_anchor,
+        target_position
+      )
+    end,
+  })
+end
+
+local function restore_hunk(session)
+  if session.busy.mutation then
+    return
+  end
+
+  local target = active_target(session)
+  local change = target and change_for(session, target.change_id)
+  if not change or not target.hunk_id then
+    mutation_error(session, Result.err(
+      "hunk_required",
+      "Select an unstaged hunk before discarding it"
+    ).error)
+    return
+  end
+  if change.section == "staged" then
+    mutation_error(session, Result.err(
+      "unstage_first",
+      "Unstage this hunk before discarding it"
+    ).error)
+    return
+  end
+  if change.section ~= "unstaged" then
+    mutation_error(session, Result.err("stale_hunk", "Selected hunk is missing or stale").error)
+    return
+  end
+  if type(context.changes.git.restore_hunk) ~= "function" then
+    mutation_error(session, Result.err("mutation_unavailable", "Hunk rollback is unavailable").error)
+    return
+  end
+
+  local rendered_hunk = hunk_for(
+    change,
+    session.data.diffs and session.data.diffs[change.id],
+    target.hunk_id
+  )
+  if not rendered_hunk or type(rendered_hunk.patch) ~= "string" then
+    mutation_error(session, Result.err("stale_hunk", "Selected hunk is missing or stale").error)
+    return
+  end
+  local rendered_patch = rendered_hunk.patch
+
+  session.mutations = session.mutations or {}
+  session.mutations.restore_hunk_serial = (session.mutations.restore_hunk_serial or 0) + 1
+  local source_anchor = file_anchor(session, change)
+  local target_position = file_target_position(session, change.id)
+  local mutation_path = change.path
+  context.mutations:enqueue(session, {
+    id = "restore_hunk:" .. session.mutations.restore_hunk_serial,
+    run = function(done)
+      local latest_change = change_for(session, target.change_id)
+      if session.closed or not latest_change or latest_change.section ~= "unstaged" then
+        done(Result.err("stale_hunk", "Selected hunk is missing or stale"))
+        return
+      end
+      local ui = config.get().ui
+      context.changes.git:diff(
+        session.root,
+        latest_change,
+        ui.context_lines,
+        ui.max_diff_bytes,
+        function(diff_result)
+          if session.closed then
+            done(Result.err("stale_hunk", "Selected hunk is missing or stale"))
+            return
+          end
+          if not diff_result.ok then
+            done(diff_result)
+            return
+          end
+          local hunk = hunk_for(latest_change, diff_result.value, target.hunk_id)
+          if not hunk or hunk.patch ~= rendered_patch then
+            done(Result.err("stale_hunk", "Selected hunk is missing or stale"))
+            return
+          end
+          mutation_path = latest_change.path
+          context.changes.git:restore_hunk(
+            session.root,
+            diff_result.value,
+            hunk,
+            done
+          )
+        end
+      )
+    end,
+    after_success = function()
+      refresh_file_mutation(
+        session,
+        mutation_path,
+        "unstaged",
+        source_anchor,
+        target_position
+      )
+    end,
+  })
+end
+
+local function restore_file(session)
+  if session.busy.mutation then
+    return
+  end
+
+  local change = active_change(session)
+  if not change or (change.section ~= "staged" and change.section ~= "unstaged") then
+    mutation_error(session, Result.err("stale_change", "File change is missing or stale").error)
+    return
+  end
+  if type(context.changes.git.restore_file) ~= "function" then
+    mutation_error(session, Result.err("mutation_unavailable", "File rollback is unavailable").error)
+    return
+  end
+
+  local prompt = change.status == "?"
+    and ("Delete untracked file " .. change.path .. "?")
+    or ("Restore " .. change.path .. " to HEAD? Staged and unstaged changes will be lost.")
+  local confirmed_identity = change_identity(change)
+  confirm.ask(prompt, function(accepted)
+    if not accepted or session.closed or session.busy.mutation then
+      return
+    end
+    session.mutations = session.mutations or {}
+    session.mutations.restore_file_serial = (session.mutations.restore_file_serial or 0) + 1
+    local source_anchor = file_anchor(session, change)
+    local target_position = file_target_position(session, change.id)
+    context.mutations:enqueue(session, {
+      id = "restore_file:" .. session.mutations.restore_file_serial,
+      run = function(done)
+        local latest_change = change_for(session, change.id)
+        if session.closed or not latest_change
+            or change_identity(latest_change) ~= confirmed_identity then
+          done(Result.err("stale_change", "File change is missing or stale"))
+          return
+        end
+        context.changes.git:restore_file(session.root, latest_change, done)
+      end,
+      after_success = function()
+        refresh_file_mutation(
+          session,
+          change.path,
+          change.section,
+          source_anchor,
+          target_position
+        )
+      end,
+    })
+  end)
 end
 
 local function readonly(values)
@@ -221,14 +766,11 @@ local function complete_handler(session, action, request, result)
 
   session.errors = session.errors or {}
   if result.ok then
-    if session.error == session.errors.handler then
-      session.error = nil
-    end
     session.errors.handler = nil
   else
     session.errors.handler = result.error
-    session.error = result.error
   end
+  ErrorState.resolve(session)
   renderer.render(session)
 end
 
@@ -376,6 +918,20 @@ function M.dispatch(session, intent)
   elseif name == "toggle_changes_mode" then
     session.view.changes_mode = session.view.changes_mode == "tree" and "list" or "tree"
     renderer.render(session)
+  elseif name == "toggle_file_index" then
+    toggle_file_index(session)
+  elseif name == "toggle_hunk_index" then
+    toggle_hunk_index(session)
+  elseif name == "restore_hunk" then
+    restore_hunk(session)
+  elseif name == "restore_file" then
+    restore_file(session)
+  elseif name == "add_comment" then
+    add_or_edit_comment(session)
+  elseif name == "open_comments" then
+    open_comments(session)
+  elseif name == "prepare_prompt" then
+    prepare_prompt(session)
   elseif name == "open_file" then
     invoke_handler(
       session,
@@ -425,6 +981,7 @@ function M.dispatch(session, intent)
       )
     end
   elseif name == "refresh" then
+    reload_comments(session)
     local captured = capture_diff_anchor(session)
     if not captured then
       refresh_requests[session] = nil

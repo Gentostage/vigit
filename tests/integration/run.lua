@@ -7,6 +7,12 @@ local finished = false
 local default_files = {
   "tests/integration/process_spec.lua",
   "tests/integration/git_read_spec.lua",
+  "tests/integration/git_file_mutations_spec.lua",
+  "tests/integration/git_hunk_mutations_spec.lua",
+  "tests/integration/git_rollback_spec.lua",
+  "tests/integration/secure_unlink_spec.lua",
+  "tests/integration/filesystem_spec.lua",
+  "tests/integration/legacy_review_spec.lua",
 }
 
 local function print_result(prefix, name, message)

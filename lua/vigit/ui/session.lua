@@ -13,6 +13,13 @@ function M.new(opts)
       changes_buf = nil,
       diff_win = nil,
       changes_win = nil,
+      comments_buf = nil,
+      comments_win = nil,
+      comment_editor_buf = nil,
+      comment_editor_win = nil,
+      comment_editor_id = nil,
+      prompt_buf = nil,
+      prompt_win = nil,
     },
     view = {
       changes_mode = "tree",

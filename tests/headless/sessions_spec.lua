@@ -711,7 +711,7 @@ it("renders a typed status failure in every diff mode without hiding retained ro
       status = status_error,
       diffs = {},
     },
-    error = stale_error,
+    error = status_error,
   }
 
   local all_files = diff_view.render(state, 100)
@@ -721,10 +721,7 @@ it("renders a typed status failure in every diff mode without hiding retained ro
   ))
   assert_truthy(vim.tbl_contains(all_files.lines, "value = \"old\""))
   assert_truthy(vim.tbl_contains(all_files.lines, "value = \"new\""))
-  assert_equal(vim.tbl_contains(
-    all_files.lines,
-    "Error [stale_error]: Must not be rendered"
-  ), false)
+  assert_equal(vim.tbl_contains(all_files.lines, "Error [stale_error]: Must not be rendered"), false)
 
   state.view.diff_mode = "one_file"
   state.view.selected_change_id = "unstaged\0missing.py"
@@ -967,10 +964,24 @@ it("publishes the basic normal-mode key registry", function()
     "gd",
     "T",
     "f",
+    "s",
+    "S",
+    "x",
+    "X",
     "[f",
     "a",
     "t",
     "r",
+    "c",
+    "C",
+    "P",
+    "<CR>",
+    "e",
+    "d",
+    "q",
+    "<C-s>",
+    "q",
+    "<Esc>",
     "q",
   }
   assert_equal(#keymaps.entries, #expected)
@@ -981,6 +992,7 @@ it("publishes the basic normal-mode key registry", function()
     assert_truthy(type(entry.id) == "string" and entry.id ~= "")
     assert_truthy(type(entry.intent) == "string" and entry.intent ~= "")
   end
+  assert_equal(keymaps.entries[9].intent, "toggle_hunk_index")
 end)
 
 it("validates setup options and registers commands only once", function()
@@ -1014,8 +1026,10 @@ it("validates setup options and registers commands only once", function()
     assert_equal(config.get().ui.changes_width, 30)
     assert_equal(command_calls.Vigit, 1)
     assert_equal(command_calls.VigitV2, 1)
+    assert_equal(command_calls.VigitMigrateReviews, 1)
     assert_equal(vim.fn.exists(":Vigit"), 2)
     assert_equal(vim.fn.exists(":VigitV2"), 2)
+    assert_equal(vim.fn.exists(":VigitMigrateReviews"), 2)
 
     vim.cmd("VigitV2 " .. vim.fn.fnameescape(repo.root))
     session = assert(v2.open({ cwd = repo.root }))

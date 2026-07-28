@@ -1,5 +1,6 @@
 local process = require("vigit.adapters.process")
 local Git = require("vigit.adapters.git_cli")
+local anchor = require("vigit.core.anchor")
 local treesitter = require("vigit.adapters.treesitter")
 local config = require("vigit.config")
 local changes_view = require("vigit.ui.views.changes")
@@ -16,6 +17,7 @@ local syntax_dependencies = {
 local namespaces = setmetatable({}, { __mode = "k" })
 local syntax_states = setmetatable({}, { __mode = "k" })
 local targets = {}
+local comment_rows = {}
 
 local function valid_buffer(buffer)
   return buffer and vim.api.nvim_buf_is_valid(buffer)
@@ -43,9 +45,47 @@ local function session_namespaces(session)
     diff = vim.api.nvim_create_namespace(prefix .. "-diff"),
     diff_targets = vim.api.nvim_create_namespace(prefix .. "-diff-targets"),
     diff_status = vim.api.nvim_create_namespace(prefix .. "-diff-status"),
+    comments = vim.api.nvim_create_namespace(prefix .. "-comments"),
   }
   namespaces[session] = owned
   return owned
+end
+
+local function comment_preview(body)
+  local preview = vim.trim(tostring(body or ""):gsub("%s+", " "))
+  if preview == "" then preview = "(empty comment)" end
+  if vim.fn.strchars(preview) > 52 then
+    preview = vim.fn.strcharpart(preview, 0, 51) .. "…"
+  end
+  return preview
+end
+
+local function apply_comment_markers(session, rendered, namespace)
+  local buffer = session.owned.diff_buf
+  if not valid_buffer(buffer) then return end
+  vim.api.nvim_buf_clear_namespace(buffer, namespace, 0, -1)
+  comment_rows[buffer] = {}
+  for _, comment in ipairs(session.data.comments or {}) do
+    local row = anchor.match(rendered.rows, {
+      path = comment.path,
+      section = comment.section,
+      side = comment.side,
+      source_line = comment.line,
+      column = comment.column or 0,
+      context = comment.context,
+    }, { strict_side = true })
+    if row then
+      local ids = comment_rows[buffer][row] or {}
+      ids[#ids + 1] = comment.id
+      comment_rows[buffer][row] = ids
+      vim.api.nvim_buf_set_extmark(buffer, namespace, row - 1, 0, {
+        virt_text = { { " ● " .. comment.id .. " · " .. comment_preview(comment.body), "Comment" } },
+        virt_text_pos = "eol",
+        priority = diff_highlights.priorities.overlay + 1,
+        strict = false,
+      })
+    end
+  end
 end
 
 local function add_view_highlights(buffer, namespace, output)
@@ -387,6 +427,7 @@ function M.render(session)
     state,
     owned_namespaces.diff_status
   )
+  apply_comment_markers(session, diff, owned_namespaces.comments)
   if session.owned.diff_win
       and vim.api.nvim_win_is_valid(session.owned.diff_win) then
     vim.wo[session.owned.diff_win].signcolumn = "yes:1"
@@ -412,11 +453,19 @@ function M.file_targets(session)
   return result
 end
 
+function M.comment_ids_at(buffer, row)
+  local source = comment_rows[buffer] and comment_rows[buffer][row] or {}
+  local result = {}
+  for index, id in ipairs(source) do result[index] = id end
+  return result
+end
+
 function M.clear(session)
   cancel_syntax_jobs(session)
   syntax_states[session] = nil
   if session.owned.diff_buf then
     targets[session.owned.diff_buf] = nil
+    comment_rows[session.owned.diff_buf] = nil
   end
   if session.owned.changes_buf then
     targets[session.owned.changes_buf] = nil

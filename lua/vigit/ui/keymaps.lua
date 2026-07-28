@@ -60,6 +60,38 @@ M.entries = {
     intent = "toggle_context",
   },
   {
+    id = "change.toggle_index",
+    modes = { "n" },
+    lhs = "s",
+    contexts = { "diff", "changes" },
+    description = "Stage or unstage current file",
+    intent = "toggle_file_index",
+  },
+  {
+    id = "hunk.toggle_index",
+    modes = { "n" },
+    lhs = "S",
+    contexts = { "diff" },
+    description = "Stage or unstage current hunk",
+    intent = "toggle_hunk_index",
+  },
+  {
+    id = "hunk.restore",
+    modes = { "n" },
+    lhs = "x",
+    contexts = { "diff" },
+    description = "Discard current unstaged hunk",
+    intent = "restore_hunk",
+  },
+  {
+    id = "change.restore",
+    modes = { "n" },
+    lhs = "X",
+    contexts = { "diff", "changes" },
+    description = "Restore current file to HEAD",
+    intent = "restore_file",
+  },
+  {
     id = "change.previous_file",
     modes = { "n" },
     lhs = "[f",
@@ -90,6 +122,86 @@ M.entries = {
     contexts = { "diff", "changes" },
     description = "Refresh changes",
     intent = "refresh",
+  },
+  {
+    id = "comment.add_or_edit",
+    modes = { "n" },
+    lhs = "c",
+    contexts = { "diff" },
+    description = "Add or edit comment at diff anchor",
+    intent = "add_comment",
+  },
+  {
+    id = "comment.open_list",
+    modes = { "n" },
+    lhs = "C",
+    contexts = { "diff", "changes" },
+    description = "Open comments list",
+    intent = "open_comments",
+  },
+  {
+    id = "comment.prepare_prompt",
+    modes = { "n" },
+    lhs = "P",
+    contexts = { "diff", "changes" },
+    description = "Copy or show open-comments prompt",
+    intent = "prepare_prompt",
+  },
+  {
+    id = "comments.jump",
+    modes = { "n" },
+    lhs = "<CR>",
+    contexts = { "comments" },
+    description = "Jump to comment anchor",
+    intent = "select_comment",
+  },
+  {
+    id = "comments.edit",
+    modes = { "n" },
+    lhs = "e",
+    contexts = { "comments" },
+    description = "Edit selected comment",
+    intent = "edit_comment",
+  },
+  {
+    id = "comments.delete",
+    modes = { "n" },
+    lhs = "d",
+    contexts = { "comments" },
+    description = "Delete selected comment (y/N)",
+    intent = "delete_comment",
+  },
+  {
+    id = "comments.close",
+    modes = { "n" },
+    lhs = "q",
+    contexts = { "comments", "prompt" },
+    description = "Close Vigit popup",
+    intent = "close",
+  },
+  {
+    id = "comment_editor.save",
+    modes = { "n", "i" },
+    lhs = "<C-s>",
+    contexts = { "comment_editor" },
+    description = "Save comment",
+    intent = "save_comment",
+  },
+  {
+    id = "comment_editor.close",
+    modes = { "n" },
+    lhs = "q",
+    contexts = { "comment_editor" },
+    description = "Close comment editor",
+    intent = "close",
+  },
+  {
+    id = "comment_editor.escape",
+    modes = { "n" },
+    lhs = "<Esc>",
+    contexts = { "comment_editor" },
+    description = "Close comment editor",
+    intent = "close",
   },
   {
     id = "session.close",
@@ -171,6 +283,19 @@ function M.apply(session)
       callback = on_owned_buffer_wipe,
       desc = "Dispose the Vigit session with its owned tab",
     })
+  end
+end
+
+function M.apply_aux(session, buffer, name, handlers)
+  for _, entry in ipairs(M.entries) do
+    if includes(entry.contexts, name) and handlers[entry.intent] then
+      vim.keymap.set(entry.modes, entry.lhs, handlers[entry.intent], {
+        buffer = buffer,
+        desc = "Vigit: " .. entry.description,
+        noremap = true,
+        silent = true,
+      })
+    end
   end
 end
 

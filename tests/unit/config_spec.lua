@@ -39,3 +39,16 @@ it("keeps a resolved snapshot isolated from callers", function()
 
   assert_equal(config.get().ui.changes_width, 28)
 end)
+
+it("accepts only a safe repository-relative review path", function()
+  local accepted = config.resolve({ review = { path = ".custom/review.md" } })
+  assert_truthy(accepted.ok)
+  assert_equal(accepted.value.review.path, ".custom/review.md")
+
+  for _, path in ipairs({ "", "/tmp/review.md", "../review.md", "nested/../review.md", "nested\\review.md", "nested/", "review\0.md" }) do
+    local rejected = config.resolve({ review = { path = path } })
+    assert_equal(rejected.ok, false)
+    assert_equal(rejected.error.code, "invalid_config")
+    assert_truthy(rejected.error.message:find("review.path", 1, true) ~= nil)
+  end
+end)

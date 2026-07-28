@@ -2,6 +2,7 @@ local process = require("vigit.adapters.process")
 local Git = require("vigit.adapters.git_cli")
 local neovim = require("vigit.adapters.neovim")
 local Changes = require("vigit.application.changes")
+local Reviews = require("vigit.application.reviews")
 local config = require("vigit.config")
 local controller = require("vigit.ui.controller")
 local keymaps = require("vigit.ui.keymaps")
@@ -116,6 +117,7 @@ function M.open(opts)
     id = "vigit-" .. next_id,
     root = root,
   })
+  session.review_service = Reviews.new({ relative_path = config.get().review.path })
   session.view.changes_mode = config.get().ui.changes_mode
   registry:put(session)
 
@@ -134,9 +136,21 @@ function M.open(opts)
   end
 
   keymaps.apply(session)
+  local comments = session.review_service:load(session)
+  if not comments.ok then
+    session.errors.comments = comments.error
+    session.error = comments.error
+  end
   renderer.render(session)
   changes:refresh(session)
   return session
+end
+
+function M.active_session()
+  local current = vim.api.nvim_get_current_tabpage()
+  for _, session in ipairs(registry:all()) do
+    if not session.closed and session.owned.tab == current then return session end
+  end
 end
 
 return M

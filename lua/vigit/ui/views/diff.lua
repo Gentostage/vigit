@@ -368,13 +368,6 @@ local function is_diff_error(error, diff_errors)
 end
 
 local function visible_global_error(state, diff_errors)
-  local errors = state.errors or {}
-  if errors.status then
-    return errors.status
-  end
-  if errors.handler then
-    return errors.handler
-  end
   if state.error and not is_diff_error(state.error, diff_errors) then
     return state.error
   end
@@ -393,7 +386,7 @@ function M.render(state, width)
   local diff_errors = errors.diffs or {}
 
   if not status then
-    local initial_error = errors.status or errors.handler or state.error
+    local initial_error = state.error
     if initial_error then
       add_line(
         output,

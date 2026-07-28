@@ -285,3 +285,41 @@ it("отменяет заменённые status и diff reads до переза
   assert_equal(fake.diff_handles[2].cancelled, 1)
   assert_equal(fake.status_handles[2].cancelled, 0)
 end)
+
+it("сохраняет comments error, когда Git error очищается", function()
+  local session = Session.new({ id = "errors", root = "/repo" })
+  session.errors.comments = { code = "comments_failed", message = "Comment file is malformed" }
+  session.errors.diffs = {}
+
+  Changes.expose_error(session)
+
+  assert_equal(session.error.code, "comments_failed")
+  session.errors.status = { code = "git_failed", message = "Git failed" }
+  Changes.expose_error(session)
+  assert_equal(session.error.code, "git_failed")
+  session.errors.status = nil
+  Changes.expose_error(session)
+  assert_equal(session.error.code, "comments_failed")
+
+  session.errors.diffs = {
+    ["z-change"] = { code = "z_diff", message = "Z diff" },
+    ["a-change"] = { code = "a_diff", message = "A diff" },
+  }
+  session.errors.mutation = { code = "mutation_failed", message = "Mutation failed" }
+  session.errors.handler = { code = "handler_failed", message = "Handler failed" }
+  session.view.selected_change_id = "z-change"
+  Changes.expose_error(session)
+  assert_equal(session.error.code, "z_diff")
+  session.view.selected_change_id = nil
+  Changes.expose_error(session)
+  assert_equal(session.error.code, "a_diff")
+  session.errors.diffs = {}
+  Changes.expose_error(session)
+  assert_equal(session.error.code, "comments_failed")
+  session.errors.comments = nil
+  Changes.expose_error(session)
+  assert_equal(session.error.code, "mutation_failed")
+  session.errors.mutation = nil
+  Changes.expose_error(session)
+  assert_equal(session.error.code, "handler_failed")
+end)

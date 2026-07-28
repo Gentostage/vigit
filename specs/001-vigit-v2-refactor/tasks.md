@@ -45,17 +45,17 @@ jumplist и lifecycle; syntax работает до открытия файла.
 
 ## Phase 3 — Git mutations и comments
 
-- [ ] T011 Реализовать FIFO mutation queue и compact `y/N` confirmation по
+- [x] T011 Реализовать FIFO mutation queue и compact `y/N` confirmation по
   [Plan 03, Task 1](./plans/03-git-mutations-and-comments.md#task-1-serialized-mutation-queue-и-compact-confirmation).
-- [ ] T012 Добавить file stage/unstage для tracked, untracked, mixed и unborn
+- [x] T012 Добавить file stage/unstage для tracked, untracked, mixed и unborn
   HEAD по [Plan 03, Task 2](./plans/03-git-mutations-and-comments.md#task-2-file-stageunstage-contracts).
-- [ ] T013 Добавить exact hunk patch stage/unstage с matching preflight по
+- [x] T013 Добавить exact hunk patch stage/unstage с matching preflight по
   [Plan 03, Task 3](./plans/03-git-mutations-and-comments.md#task-3-exact-hunk-patch-stageunstage).
-- [ ] T014 Реализовать safe hunk/file rollback без broad fallback по
+- [x] T014 Реализовать safe hunk/file rollback без broad fallback по
   [Plan 03, Task 4](./plans/03-git-mutations-and-comments.md#task-4-safe-hunkfile-rollback).
-- [ ] T015 Реализовать block-preserving `.vigit/comments.md` и atomic storage
+- [x] T015 Реализовать block-preserving `.vigit/comments.md` и atomic storage
   по [Plan 03, Task 5](./plans/03-git-mutations-and-comments.md#task-5-canonical-markdown-comments-и-atomic-storage).
-- [ ] T016 Добавить comment list/edit/delete, prompt и explicit legacy importer
+- [x] T016 Добавить comment list/edit/delete, prompt и explicit legacy importer
   по [Plan 03, Task 6](./plans/03-git-mutations-and-comments.md#task-6-comment-use-cases-ui-prompt-и-explicit-importer).
 
 **Checkpoint:** unrelated index/worktree bytes сохраняются, destructive default

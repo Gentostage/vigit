@@ -2,6 +2,8 @@ local Result = require("vigit.core.result")
 local DescriptorPath = require("vigit.adapters.descriptor_path")
 local status_parser = require("vigit.core.status")
 local diff_parser = require("vigit.core.diff")
+local patch = require("vigit.core.patch")
+local SecureUnlink = require("vigit.adapters.secure_unlink")
 
 local M = {}
 
@@ -380,7 +382,7 @@ local function synthetic_diff(change, content)
   return parsed
 end
 
-function M.new(process, filesystem, descriptor_paths)
+function M.new(process, filesystem, descriptor_paths, secure_unlink)
   local reader = filesystem and filesystem.read_file
   if not reader then
     descriptor_paths = descriptor_paths or DescriptorPath.new()
@@ -392,6 +394,7 @@ function M.new(process, filesystem, descriptor_paths)
   return setmetatable({
     process = assert(process),
     read_file = reader,
+    secure_unlink = secure_unlink or SecureUnlink.new(),
   }, Git)
 end
 
@@ -414,6 +417,576 @@ function Git:status(root, callback)
   end)
 end
 
+local function stale_change(callback, details)
+  return async_result(callback, Result.err(
+    "stale_change",
+    "File change is missing or stale",
+    details
+  ))
+end
+
+local function mutation_paths(change, include_old_path)
+  if type(change) ~= "table" then
+    return nil, "change is missing"
+  end
+
+  local invalid = validate_relative_path(change.path)
+  if invalid then
+    return nil, invalid.error.details
+  end
+
+  local paths = { change.path }
+  if include_old_path and change.status == "R" then
+    if not change.old_path or change.old_path == change.path then
+      return nil, "rename old path is missing or unchanged"
+    end
+    invalid = validate_relative_path(change.old_path)
+    if invalid then
+      return nil, invalid.error.details
+    end
+    table.insert(paths, 1, change.old_path)
+  end
+  return paths
+end
+
+local function verified_mutation_status(result, section, path)
+  if not result.ok then
+    return result
+  end
+  for _, change in ipairs(result.value[section] or {}) do
+    if change.path == path then
+      return Result.err("stale_change", "File change is missing or stale")
+    end
+  end
+  return result
+end
+
+function Git:stage_file(root, change, callback)
+  local paths, validation_error = mutation_paths(change, true)
+  if not paths then
+    return stale_change(callback, validation_error)
+  end
+
+  local args = { "git", "--literal-pathspecs", "add", "-A", "--" }
+  vim.list_extend(args, paths)
+  local cancelled = false
+  local status_handle
+  local add_handle = self.process.run(args, {
+    cwd = root,
+  }, function(result)
+    if cancelled then
+      return
+    end
+    if not result.ok then
+      callback(Result.err(
+        "stale_change",
+        "File change is missing or stale",
+        result.error and result.error.details
+      ))
+      return
+    end
+    status_handle = self:status(root, function(status_result)
+      if not cancelled then
+        callback(verified_mutation_status(status_result, "unstaged", change.path))
+      end
+    end)
+  end)
+
+  return {
+    cancel = function()
+      cancelled = true
+      if add_handle and add_handle.cancel then
+        add_handle.cancel()
+      end
+      if status_handle and status_handle.cancel then
+        status_handle.cancel()
+      end
+    end,
+  }
+end
+
+function Git:unstage_file(root, change, callback)
+  local paths, validation_error = mutation_paths(change, true)
+  if not paths then
+    return stale_change(callback, validation_error)
+  end
+
+  local cancelled = false
+  local check_handle
+  local apply_handle
+  local status_handle
+  local diff_args = {
+    "git",
+    "--literal-pathspecs",
+    "diff",
+    "--cached",
+    "--binary",
+    "--full-index",
+    "--",
+  }
+  vim.list_extend(diff_args, paths)
+  local diff_handle = self.process.run(diff_args, {
+    cwd = root,
+  }, function(diff_result)
+    if cancelled then
+      return
+    end
+    if not diff_result.ok then
+      callback(git_error("unstage_file", diff_result))
+      return
+    end
+
+    local patch = diff_result.value.stdout or ""
+    if patch == "" then
+      callback(Result.err("stale_change", "File change is missing or stale"))
+      return
+    end
+
+    local check_args = { "git", "apply", "--cached", "--reverse", "--check" }
+    check_handle = self.process.run(check_args, {
+      cwd = root,
+      stdin = patch,
+    }, function(check_result)
+      if cancelled then
+        return
+      end
+      if not check_result.ok then
+        callback(git_error("unstage_file", check_result))
+        return
+      end
+
+      apply_handle = self.process.run({
+        "git", "apply", "--cached", "--reverse",
+      }, {
+        cwd = root,
+        stdin = patch,
+      }, function(apply_result)
+        if cancelled then
+          return
+        end
+        if not apply_result.ok then
+          callback(git_error("unstage_file", apply_result))
+          return
+        end
+        status_handle = self:status(root, function(status_result)
+          if not cancelled then
+            callback(verified_mutation_status(status_result, "staged", change.path))
+          end
+        end)
+      end)
+    end)
+  end)
+
+  return {
+    cancel = function()
+      cancelled = true
+      for _, handle in ipairs({ diff_handle, check_handle, apply_handle, status_handle }) do
+        if handle and handle.cancel then
+          handle.cancel()
+        end
+      end
+    end,
+  }
+end
+
+local function patch_conflict(callback, result)
+  local error = result.error or {}
+  callback(Result.err(
+    "patch_conflict",
+    "Selected hunk no longer applies cleanly",
+    error.details or error.message
+  ))
+end
+
+local function unstage_first(callback)
+  return async_result(callback, Result.err(
+    "unstage_first",
+    "Unstage this hunk before discarding it"
+  ))
+end
+
+local function mutate_hunk(git, root, file_diff, hunk, reverse, callback)
+  local patch_result = patch.for_hunk(file_diff, hunk, {
+    normalize_rename_for_reverse = reverse,
+  })
+  if not patch_result.ok then
+    return async_result(callback, patch_result)
+  end
+
+  local stdin = patch_result.value
+  local unidiff_zero = patch.needs_unidiff_zero(hunk)
+  local check_args = { "git", "apply", "--cached" }
+  if reverse then
+    check_args[#check_args + 1] = "--reverse"
+  end
+  if unidiff_zero then
+    check_args[#check_args + 1] = "--unidiff-zero"
+  end
+  vim.list_extend(check_args, { "--recount", "--check", "-" })
+
+  local apply_args = { "git", "apply", "--cached" }
+  if reverse then
+    apply_args[#apply_args + 1] = "--reverse"
+  end
+  if unidiff_zero then
+    apply_args[#apply_args + 1] = "--unidiff-zero"
+  end
+  vim.list_extend(apply_args, { "--recount", "-" })
+
+  local cancelled = false
+  local apply_handle
+  local check_handle = git.process.run(check_args, {
+    cwd = root,
+    stdin = stdin,
+  }, function(check_result)
+    if cancelled then
+      return
+    end
+    if not check_result.ok then
+      patch_conflict(callback, check_result)
+      return
+    end
+    apply_handle = git.process.run(apply_args, {
+      cwd = root,
+      stdin = stdin,
+    }, function(apply_result)
+      if cancelled then
+        return
+      end
+      if not apply_result.ok then
+        patch_conflict(callback, apply_result)
+        return
+      end
+      callback(Result.ok(true))
+    end)
+  end)
+
+  return {
+    cancel = function()
+      cancelled = true
+      for _, handle in ipairs({ check_handle, apply_handle }) do
+        if handle and handle.cancel then
+          handle.cancel()
+        end
+      end
+    end,
+  }
+end
+
+function Git:stage_hunk(root, file_diff, hunk, callback)
+  return mutate_hunk(self, root, file_diff, hunk, false, callback)
+end
+
+function Git:unstage_hunk(root, file_diff, hunk, callback)
+  return mutate_hunk(self, root, file_diff, hunk, true, callback)
+end
+
+function Git:restore_hunk(root, file_diff, hunk, callback)
+  if not file_diff or file_diff.section ~= "unstaged" then
+    return unstage_first(callback)
+  end
+
+  local patch_result = patch.for_hunk(file_diff, hunk)
+  if not patch_result.ok then
+    return async_result(callback, patch_result)
+  end
+
+  local stdin = patch_result.value
+  local check_args = { "git", "apply", "--reverse" }
+  if patch.needs_unidiff_zero(hunk) then
+    check_args[#check_args + 1] = "--unidiff-zero"
+  end
+  vim.list_extend(check_args, { "--recount", "--check", "-" })
+
+  local apply_args = { "git", "apply", "--reverse" }
+  if patch.needs_unidiff_zero(hunk) then
+    apply_args[#apply_args + 1] = "--unidiff-zero"
+  end
+  vim.list_extend(apply_args, { "--recount", "-" })
+
+  local cancelled = false
+  local apply_handle
+  local check_handle = self.process.run(check_args, {
+    cwd = root,
+    stdin = stdin,
+  }, function(check_result)
+    if cancelled then
+      return
+    end
+    if not check_result.ok then
+      patch_conflict(callback, check_result)
+      return
+    end
+    apply_handle = self.process.run(apply_args, {
+      cwd = root,
+      stdin = stdin,
+    }, function(apply_result)
+      if cancelled then
+        return
+      end
+      if not apply_result.ok then
+        patch_conflict(callback, apply_result)
+        return
+      end
+      callback(Result.ok(true))
+    end)
+  end)
+
+  return {
+    cancel = function()
+      cancelled = true
+      for _, handle in ipairs({ check_handle, apply_handle }) do
+        if handle and handle.cancel then
+          handle.cancel()
+        end
+      end
+    end,
+  }
+end
+
+local function unlink_repository_file(git, root, path, callback)
+  return git.secure_unlink:unlink(root, path, callback)
+end
+
+local function has_identity(change, identities)
+  return identities[change.path] or (change.old_path and identities[change.old_path])
+end
+
+local function coalesced_changes(status, selected)
+  local identities = { [selected.path] = true }
+  if selected.old_path then identities[selected.old_path] = true end
+  local rows = {}
+  local changed = true
+  while changed do
+    changed = false
+    for _, section in ipairs({ "staged", "unstaged" }) do
+      for _, candidate in ipairs(status[section] or {}) do
+        if has_identity(candidate, identities) and not rows[candidate] then
+          rows[candidate] = true
+          if not identities[candidate.path] then identities[candidate.path], changed = true, true end
+          if candidate.old_path and not identities[candidate.old_path] then
+            identities[candidate.old_path], changed = true, true
+          end
+        end
+      end
+    end
+  end
+  local ordered, paths, seen = {}, {}, {}
+  for _, section in ipairs({ "staged", "unstaged" }) do
+    for _, candidate in ipairs(status[section] or {}) do
+      if rows[candidate] then
+        ordered[#ordered + 1] = candidate
+        if candidate.old_path and not seen[candidate.old_path] then
+          seen[candidate.old_path] = true
+          paths[#paths + 1] = candidate.old_path
+        end
+        if not seen[candidate.path] then
+          seen[candidate.path] = true
+          paths[#paths + 1] = candidate.path
+        end
+      end
+    end
+  end
+  return ordered, paths, identities
+end
+
+local function expected_existence(rows, head_restore)
+  local expected = {}
+  local function set(path, exists)
+    if path and expected[path] == nil then expected[path] = exists end
+  end
+  for _, row in ipairs(rows) do
+    if row.status == "R" then
+      set(row.old_path, true)
+      set(row.path, false)
+    elseif row.status == "A" then
+      set(row.path, false)
+    elseif row.status == "D" then
+      set(row.path, true)
+    elseif row.status ~= "?" then
+      set(row.path, true)
+    elseif not head_restore then
+      set(row.path, false)
+    end
+  end
+  return expected
+end
+
+local function inspect_unborn_additions(raw, paths)
+  local function rejected(message, details)
+    return Result.err("unsupported_unborn_restore", message, details)
+  end
+  if type(raw) ~= "string" or raw == "" then
+    return rejected("Unborn rollback index preflight is empty or malformed")
+  end
+  if raw:sub(-1) ~= "\0" then
+    return rejected("Unborn rollback index preflight is not NUL-terminated")
+  end
+  local expected, seen = {}, {}
+  for _, path in ipairs(paths) do expected[path] = true end
+  local start = 1
+  while start <= #raw do
+    local finish = raw:find("\0", start, true)
+    if not finish then
+      return rejected("Unborn rollback index preflight is not NUL-framed")
+    end
+    local record = raw:sub(start, finish - 1)
+    start = finish + 1
+    local mode, object_id, stage, path = record:match("^([0-7][0-7][0-7][0-7][0-7][0-7]) ([0-9a-f]+) ([0-3])\t(.*)$")
+    if not mode or not object_id or (#object_id ~= 40 and #object_id ~= 64)
+        or not path or not expected[path] or seen[path] or stage ~= "0" then
+      return rejected("Unborn rollback requires exact ordinary index entries")
+    end
+    if mode == "160000" then
+      return Result.err(
+        "unsupported_unborn_gitlink",
+        "Unborn rollback does not remove submodules or gitlinks"
+      )
+    end
+    if mode ~= "100644" and mode ~= "100755" and mode ~= "120000" then
+      return rejected("Unborn rollback requires ordinary files or symbolic links")
+    end
+    seen[path] = true
+  end
+  for _, path in ipairs(paths) do
+    if not seen[path] then
+      return rejected(
+        "Unborn rollback index entry is missing",
+        path
+      )
+    end
+  end
+  return Result.ok(true)
+end
+
+local function verify_restore(git, root, identities, expected, callback)
+  return git:status(root, function(status_result)
+    if not status_result.ok then
+      callback(status_result)
+      return
+    end
+    for _, section in ipairs({ "staged", "unstaged" }) do
+      for _, remaining in ipairs(status_result.value[section] or {}) do
+        if has_identity(remaining, identities) then
+          callback(Result.err("restore_verification_failed", "Rollback did not remove the expected change", remaining.path))
+          return
+        end
+      end
+    end
+    local pending = {}
+    for path, exists in pairs(expected) do pending[#pending + 1] = { path = path, exists = exists } end
+    local function verify_path(index)
+      local item = pending[index]
+      if not item then
+        callback(Result.ok(true))
+        return
+      end
+      vim.uv.fs_lstat(root .. "/" .. item.path, function(_, stat)
+        if (stat ~= nil) ~= item.exists then
+          callback(Result.err("restore_verification_failed", "Rollback produced unexpected path existence", item.path))
+        else
+          verify_path(index + 1)
+        end
+      end)
+    end
+    verify_path(1)
+  end)
+end
+
+function Git:restore_file(root, change, callback)
+  local _, validation_error = mutation_paths(change, true)
+  if validation_error then return stale_change(callback, validation_error) end
+  local cancelled = false
+  local operation_handle
+  local verification_handle
+  local unborn_index_handle
+  local status_handle = self:status(root, function(status_result)
+    if cancelled then return end
+    if not status_result.ok then callback(status_result); return end
+    local rows, paths, identities = coalesced_changes(status_result.value, change)
+    if #rows == 0 then callback(Result.err("stale_change", "File change is missing or stale")); return end
+    local staged, tracked, renamed = false, false, false
+    for _, row in ipairs(rows) do
+      staged = staged or row.section == "staged"
+      tracked = tracked or row.status ~= "?"
+      renamed = renamed or row.status == "R" or row.old_path ~= nil
+    end
+    local unborn = status_result.value.branch and status_result.value.branch.oid == nil
+    local unborn_addition = false
+    if unborn then
+      unborn_addition = true
+      for _, row in ipairs(rows) do
+        if row.unmerged or row.old_path or row.status == "?" or row.status == "D" or row.status == "R" or row.status == "C" then
+          unborn_addition = false
+          break
+        end
+        unborn_addition = unborn_addition or (row.section == "staged" and row.status == "A")
+      end
+    end
+    local head_restore = tracked and (staged or renamed)
+    if unborn and tracked and not unborn_addition then
+      callback(Result.err(
+        "unsupported_unborn_restore",
+        "Cannot restore a non-addition identity without an initial commit"
+      ))
+      return
+    end
+    local expected = expected_existence(rows, head_restore)
+    local function complete_mutation(result)
+      if cancelled then return end
+      if not result.ok then callback(result); return end
+      verification_handle = verify_restore(self, root, identities, expected, callback)
+    end
+    if not tracked then
+      operation_handle = unlink_repository_file(self, root, change.path, complete_mutation)
+      return
+    end
+    if unborn then
+      local index_args = { "git", "--literal-pathspecs", "ls-files", "--stage", "-z", "--" }
+      vim.list_extend(index_args, paths)
+      unborn_index_handle = self.process.run(index_args, { cwd = root }, function(index_result)
+        if cancelled then return end
+        if not index_result.ok then
+          callback(git_error("restore_file", index_result))
+          return
+        end
+        local inspected = inspect_unborn_additions(index_result.value.stdout or "", paths)
+        if not inspected.ok then
+          callback(inspected)
+          return
+        end
+        local args = { "git", "--literal-pathspecs", "rm", "-f", "--" }
+        vim.list_extend(args, paths)
+        operation_handle = self.process.run(args, { cwd = root }, function(result)
+          if cancelled then return end
+          if result.ok then complete_mutation(Result.ok(true)) else callback(git_error("restore_file", result)) end
+        end)
+      end)
+      return
+    end
+    local args = { "git", "--literal-pathspecs", "restore" }
+    if head_restore then
+      vim.list_extend(args, { "--source=HEAD", "--staged", "--worktree" })
+    else
+      args[#args + 1] = "--worktree"
+    end
+    vim.list_extend(args, { "--" })
+    vim.list_extend(args, paths)
+    operation_handle = self.process.run(args, { cwd = root }, function(result)
+      if cancelled then return end
+      if result.ok then complete_mutation(Result.ok(true)) else callback(git_error("restore_file", result)) end
+    end)
+  end)
+  return {
+    cancel = function()
+      cancelled = true
+      for _, handle in ipairs({ status_handle, unborn_index_handle, operation_handle, verification_handle }) do
+        if handle and handle.cancel then handle.cancel() end
+      end
+    end,
+  }
+end
+
 function Git:diff(root, change, context, max_bytes, callback)
   if change.status == "?" then
     return read_repository_file(self.read_file, root, change.path, function(result)
@@ -429,16 +1002,20 @@ function Git:diff(root, change, context, max_bytes, callback)
     end)
   end
 
-  local args = { "git", "diff" }
+  local args = { "git", "--literal-pathspecs", "diff" }
   if change.section == "staged" then
     args[#args + 1] = "--cached"
   end
   vim.list_extend(args, {
     "--no-ext-diff",
+    "--full-index",
     "--unified=" .. context,
     "--",
-    change.path,
   })
+  if change.status == "R" and change.old_path and change.old_path ~= change.path then
+    args[#args + 1] = change.old_path
+  end
+  args[#args + 1] = change.path
 
   return self.process.run(args, {
     cwd = root,

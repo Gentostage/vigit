@@ -58,6 +58,54 @@ function M.setup(opts)
     force = true,
     desc = "Compatibility alias for :VigitComments",
   })
+  vim.api.nvim_create_user_command("VigitMigrateReviews", function()
+    local v2 = require("vigit.v2")
+    local session = v2.active_session()
+    if not session then
+      vim.notify("Open a VigitV2 session first", vim.log.levels.WARN, { title = "Vigit" })
+      return
+    end
+    local reviews = require("vigit.application.reviews").for_session(session)
+    local legacy = require("vigit.adapters.legacy_review").new()
+    local preview = reviews:migrate_legacy(session, legacy, false)
+    if not preview.ok then
+      vim.notify(
+        string.format("[%s] %s", preview.error.code, preview.error.message),
+        vim.log.levels.ERROR,
+        { title = "Vigit" }
+      )
+      return
+    end
+    local count = preview.value.preview.importable or 0
+    if count == 0 then
+      vim.notify("No legacy review comments to import", vim.log.levels.INFO, { title = "Vigit" })
+      return
+    end
+    require("vigit.ui.confirm").ask(
+      string.format("Import %d legacy review comment(s)?", count),
+      function(accepted)
+        if not accepted then return end
+        local migrated = reviews:migrate_legacy(session, legacy, true)
+        if not migrated.ok then
+          vim.notify(
+            string.format("[%s] %s", migrated.error.code, migrated.error.message),
+            vim.log.levels.ERROR,
+            { title = "Vigit" }
+          )
+          return
+        end
+        require("vigit.ui.controller").dispatch(session, "refresh")
+        vim.notify(
+          string.format("Imported %d legacy review comment(s)", migrated.value.imported or 0),
+          vim.log.levels.INFO,
+          { title = "Vigit" }
+        )
+      end
+    )
+  end, {
+    force = true,
+    desc = "Preview and explicitly import legacy review comments into VigitV2",
+  })
   vim.api.nvim_create_user_command("VigitHelp", function()
     require("vigit.help").open()
   end, {

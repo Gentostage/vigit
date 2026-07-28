@@ -70,6 +70,19 @@ local function invalid(path, expected)
   return Result.err("invalid_config", path .. " must be " .. expected)
 end
 
+local function valid_review_path(path)
+  if type(path) ~= "string" or path == "" or path:find("\0", 1, true)
+      or path:sub(1, 1) == "/" or path:match("^%a:[/\\]")
+      or path:find("\\", 1, true) or path:find("//", 1, true)
+      or path:sub(-1) == "/" then
+    return false
+  end
+  for component in path:gmatch("[^/]+") do
+    if component == "." or component == ".." then return false end
+  end
+  return true
+end
+
 local function merge_object(default_value, object_schema, user_value, path)
   if type(user_value) ~= "table" then
     return nil, invalid(path, "a table")
@@ -118,6 +131,9 @@ function M.resolve(user_opts)
   local value, error_result = merge_object(defaults, schema, user_opts, "")
   if error_result then
     return error_result
+  end
+  if not valid_review_path(value.review.path) then
+    return invalid("review.path", "a safe repository-relative file path")
   end
   return Result.ok(value)
 end
