@@ -63,9 +63,9 @@ jumplist и lifecycle; syntax работает до открытия файла.
 
 ## Phase 4 — Worktrees, observability и cutover
 
-- [ ] T017 Реализовать NUL worktree model, status/upstream reads и explicit
+- [x] T017 Реализовать NUL worktree model, status/upstream reads и explicit
   fetch по [Plan 04, Task 1](./plans/04-worktrees-and-cutover.md#task-1-worktree-model-и-read-adapter).
-- [ ] T018 Добавить bounded-concurrency picker и open/focus session flow по
+- [x] T018 Добавить bounded-concurrency picker и open/focus session flow по
   [Plan 04, Task 2](./plans/04-worktrees-and-cutover.md#task-2-async-worktree-listing-и-session-picker).
 - [ ] T019 Реализовать typed `DELETE`, double preflight и safe worktree remove
   по [Plan 04, Task 3](./plans/04-worktrees-and-cutover.md#task-3-safe-worktree-removal).

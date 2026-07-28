@@ -983,6 +983,14 @@ it("publishes the basic normal-mode key registry", function()
     "q",
     "<Esc>",
     "q",
+    "W",
+    "<CR>",
+    "[w",
+    "]w",
+    "r",
+    "F",
+    "d",
+    "q",
   }
   assert_equal(#keymaps.entries, #expected)
   for index, entry in ipairs(keymaps.entries) do

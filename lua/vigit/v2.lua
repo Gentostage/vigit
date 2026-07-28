@@ -3,6 +3,7 @@ local Git = require("vigit.adapters.git_cli")
 local neovim = require("vigit.adapters.neovim")
 local Changes = require("vigit.application.changes")
 local Reviews = require("vigit.application.reviews")
+local Worktrees = require("vigit.application.worktrees")
 local config = require("vigit.config")
 local controller = require("vigit.ui.controller")
 local keymaps = require("vigit.ui.keymaps")
@@ -10,6 +11,7 @@ local layout = require("vigit.ui.layout")
 local registry_module = require("vigit.ui.registry")
 local renderer = require("vigit.ui.renderer")
 local Session = require("vigit.ui.session")
+local worktrees_view = require("vigit.ui.views.worktrees")
 
 local M = {}
 
@@ -19,6 +21,7 @@ local registry = registry_module.new(function(path)
 end)
 local git = Git.new(process)
 local changes
+local worktrees
 local reconciled_generation = setmetatable({}, { __mode = "k" })
 
 local function all_missing_ids(session)
@@ -75,6 +78,11 @@ controller.configure({
   open_file = neovim.open_file,
   goto_definition = neovim.goto_definition,
   open_terminal = neovim.open_terminal,
+  worktrees = {
+    open = function(session)
+      return M.worktrees({ session = session })
+    end,
+  },
 })
 
 local function current_path()
@@ -95,6 +103,27 @@ local function focus_existing(session)
   controller.dispatch(session, "resize")
   return true
 end
+
+local function worktree_root(path, callback)
+  vim.schedule(function()
+    callback(neovim.find_repo_root(path))
+  end)
+  return { cancel = function() end }
+end
+
+worktrees = Worktrees.new({
+  git = git,
+  registry = registry,
+  neovim = {
+    canonical_root = worktree_root,
+    focus_session = focus_existing,
+    platform = (vim.uv.os_uname().sysname == "Windows_NT") and "win32" or "posix",
+  },
+  concurrency = 4,
+  open_session = function(root)
+    return M.open({ cwd = root })
+  end,
+})
 
 function M.open(opts)
   opts = opts or {}
@@ -151,6 +180,28 @@ function M.active_session()
   for _, session in ipairs(registry:all()) do
     if not session.closed and session.owned.tab == current then return session end
   end
+end
+
+function M.worktrees(opts)
+  opts = opts or {}
+  local session = opts.session
+  local root
+  if session and not session.closed then
+    root = session.root
+  else
+    local root_result = neovim.find_repo_root(opts.cwd or current_path())
+    if not root_result.ok then
+      return nil, root_result.error
+    end
+    root = root_result.value
+  end
+  local origin = session or { root = root, closed = false }
+  return worktrees_view.open({
+    app = worktrees,
+    origin = origin,
+    origin_tab = vim.api.nvim_get_current_tabpage(),
+    selected_path = root,
+  })
 end
 
 return M

@@ -40,6 +40,7 @@ function M.configure(opts)
     goto_definition = opts.goto_definition,
     open_terminal = opts.open_terminal,
     reviews = opts.reviews,
+    worktrees = opts.worktrees,
   }
   return previous
 end
@@ -953,6 +954,10 @@ function M.dispatch(session, intent)
       "Terminal handler is unavailable",
       "Terminal handler failed"
     )
+  elseif name == "open_worktrees" then
+    if context.worktrees and type(context.worktrees.open) == "function" then
+      context.worktrees.open(session)
+    end
   elseif name == "toggle_context" or name == "f" then
     refresh_requests[session] = nil
     local captured = capture_diff_anchor(session)

@@ -1,6 +1,7 @@
 local Result = require("vigit.core.result")
 local DescriptorPath = require("vigit.adapters.descriptor_path")
 local status_parser = require("vigit.core.status")
+local worktree_parser = require("vigit.core.worktree")
 local diff_parser = require("vigit.core.diff")
 local patch = require("vigit.core.patch")
 local SecureUnlink = require("vigit.adapters.secure_unlink")
@@ -415,6 +416,275 @@ function Git:status(root, callback)
     end
     callback(status_parser.parse(result.value.stdout or ""))
   end)
+end
+
+function Git:worktrees(root, callback)
+  return self.process.run({
+    "git",
+    "-C",
+    root,
+    "worktree",
+    "list",
+    "--porcelain",
+    "-z",
+  }, {}, function(result)
+    if not result.ok then
+      callback(git_error("worktrees", result))
+      return
+    end
+    callback(worktree_parser.parse_porcelain(result.value.stdout or ""))
+  end)
+end
+
+function Git:worktree_status(root, callback)
+  return self.process.run({
+    "git",
+    "-C",
+    root,
+    "status",
+    "--porcelain=v2",
+    "--branch",
+    "-z",
+    "--untracked-files=all",
+  }, {}, function(result)
+    if not result.ok then
+      callback(git_error("worktree_status", result))
+      return
+    end
+    local raw = result.value.stdout or ""
+    if raw == "" or raw:sub(-1) ~= "\0" then
+      callback(Result.err(
+        "malformed_status",
+        "Worktree status output must be NUL-terminated"
+      ))
+      return
+    end
+    local parsed = status_parser.parse(raw)
+    if not parsed.ok then
+      callback(parsed)
+      return
+    end
+    local staged = #parsed.value.staged
+    local unstaged = 0
+    local untracked = 0
+    for _, change in ipairs(parsed.value.unstaged) do
+      if change.status == "?" then
+        untracked = untracked + 1
+      else
+        unstaged = unstaged + 1
+      end
+    end
+    callback(Result.ok({
+      staged = staged,
+      unstaged = unstaged,
+      untracked = untracked,
+      dirty = staged + unstaged + untracked > 0,
+    }))
+  end)
+end
+
+local function line_value(value)
+  return (value or ""):gsub("[\r\n]+$", "")
+end
+
+local function callback_once(callback)
+  local called = false
+  return function(result)
+    if called then return end
+    called = true
+    callback(result)
+  end
+end
+
+local function is_exit_code(result, code)
+  local error = result.error or {}
+  return error.code == "process_failed"
+    and error.message == "Process exited with code " .. code
+end
+
+function Git:upstream(root, callback)
+  local cancelled = false
+  local handles = {}
+  local complete = callback_once(function(result)
+    if not cancelled then callback(result) end
+  end)
+  local function run(args, handler)
+    local handle = self.process.run(args, {}, handler)
+    handles[#handles + 1] = handle
+    return handle
+  end
+  local function no_upstream()
+    complete(Result.ok({ state = "no_upstream" }))
+  end
+  run({
+    "git",
+    "-C",
+    root,
+    "symbolic-ref",
+    "--quiet",
+    "--short",
+    "HEAD",
+  }, function(branch_result)
+    if cancelled then return end
+    if not branch_result.ok then
+      if is_exit_code(branch_result, 1) then
+        complete(Result.ok({ state = "detached" }))
+      else
+        complete(git_error("upstream", branch_result))
+      end
+      return
+    end
+    local branch = line_value(branch_result.value.stdout)
+    if branch == "" or branch == "HEAD" then
+      complete(Result.ok({ state = "detached" }))
+      return
+    end
+    run({
+      "git",
+      "-C",
+      root,
+      "for-each-ref",
+      "--format=%(upstream)%09%(upstream:short)%09%(upstream:remotename)",
+      "refs/heads/" .. branch,
+    }, function(metadata_result)
+      if cancelled then return end
+      if not metadata_result.ok then
+        complete(git_error("upstream", metadata_result))
+        return
+      end
+      local full_name, confirmation_name, remote = line_value(metadata_result.value.stdout):match("^(.-)\t(.-)\t(.*)$")
+      if not full_name or full_name == "" or confirmation_name == "" or remote == "" or remote == "." then
+        no_upstream()
+        return
+      end
+      local canonical_prefix = "refs/remotes/" .. remote .. "/"
+      if full_name:sub(1, #canonical_prefix) ~= canonical_prefix
+          or #full_name == #canonical_prefix then
+        complete(Result.err(
+          "malformed_upstream",
+          "Upstream metadata is not a remote-tracking ref",
+          full_name
+        ))
+        return
+      end
+      local name = full_name:sub(#"refs/remotes/" + 1)
+      run({
+        "git",
+        "-C",
+        root,
+        "rev-parse",
+        "--abbrev-ref",
+        "--symbolic-full-name",
+        "@{upstream}",
+      }, function(confirmation_result)
+        if cancelled then return end
+        if not confirmation_result.ok then
+          complete(git_error("upstream", confirmation_result))
+          return
+        end
+        local confirmed_name = line_value(confirmation_result.value.stdout)
+        if confirmed_name == "" or confirmed_name ~= confirmation_name then
+          complete(Result.err(
+            "malformed_upstream",
+            "Upstream confirmation does not match remote-tracking metadata",
+            confirmed_name
+          ))
+          return
+        end
+        run({
+          "git",
+          "-C",
+          root,
+        "rev-list",
+        "--left-right",
+        "--count",
+        "@{upstream}...HEAD",
+        }, function(count_result)
+          if cancelled then return end
+          if not count_result.ok then
+            complete(git_error("upstream", count_result))
+            return
+          end
+          local behind, ahead = line_value(count_result.value.stdout):match("^(%d+)%s+(%d+)$")
+          if not behind or not ahead then
+            complete(Result.err(
+              "malformed_upstream",
+              "Upstream commit counts are malformed",
+              count_result.value.stdout
+            ))
+            return
+          end
+          complete(Result.ok({
+            state = "tracking",
+            source = "local_refs",
+            name = name,
+            remote = remote,
+            ahead = tonumber(ahead),
+            behind = tonumber(behind),
+          }))
+        end)
+      end)
+    end)
+  end)
+
+  return {
+    cancel = function()
+      cancelled = true
+      for _, handle in ipairs(handles) do
+        if handle and handle.cancel then handle.cancel() end
+      end
+    end,
+  }
+end
+
+function Git:fetch(root, callback)
+  local cancelled = false
+  local complete = callback_once(function(result)
+    if not cancelled then callback(result) end
+  end)
+  local fetch_handle
+  local upstream_handle = self:upstream(root, function(upstream_result)
+    if cancelled then
+      return
+    end
+    if not upstream_result.ok then
+      complete(upstream_result)
+      return
+    end
+    if upstream_result.value.state ~= "tracking" then
+      complete(Result.err(
+        "no_upstream",
+        "Cannot fetch because this worktree has no tracking upstream"
+      ))
+      return
+    end
+    fetch_handle = self.process.run({
+      "git",
+      "-C",
+      root,
+      "fetch",
+      "--prune",
+      upstream_result.value.remote,
+    }, {}, function(result)
+      if cancelled then
+        return
+      end
+      if not result.ok then
+        complete(git_error("fetch", result))
+        return
+      end
+      complete(Result.ok(true))
+    end)
+  end)
+
+  return {
+    cancel = function()
+      cancelled = true
+      for _, handle in ipairs({ upstream_handle, fetch_handle }) do
+        if handle and handle.cancel then handle.cancel() end
+      end
+    end,
+  }
 end
 
 local function stale_change(callback, details)

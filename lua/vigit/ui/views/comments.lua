@@ -118,6 +118,9 @@ function M.open(session, reviews, opts)
         end
       end)
     end,
+    open_worktrees = function()
+      require("vigit.ui.controller").dispatch(session, "open_worktrees")
+    end,
   })
   vim.api.nvim_create_autocmd("BufWipeout", {
     buffer = buffer, once = true,
@@ -183,6 +186,9 @@ function M.open_editor(session, reviews, opts)
   require("vigit.ui.keymaps").apply_aux(session, buffer, "comment_editor", {
     save_comment = save,
     close = function() close(false) end,
+    open_worktrees = function()
+      require("vigit.ui.controller").dispatch(session, "open_worktrees")
+    end,
   })
   vim.api.nvim_create_autocmd("BufWipeout", {
     buffer = buffer, once = true,
@@ -213,6 +219,9 @@ function M.open_prompt(session, prompt)
   require("vigit.ui.keymaps").apply_aux(session, buffer, "prompt", {
     close = function()
       if valid(window) then vim.api.nvim_win_close(window, true) end
+    end,
+    open_worktrees = function()
+      require("vigit.ui.controller").dispatch(session, "open_worktrees")
     end,
   })
   vim.api.nvim_create_autocmd("BufWipeout", {

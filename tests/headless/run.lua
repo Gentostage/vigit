@@ -30,6 +30,7 @@ local files = #arg > 0 and arg or {
   "tests/headless/rollback_spec.lua",
   "tests/headless/comments_spec.lua",
   "tests/headless/confirm_spec.lua",
+  "tests/headless/worktrees_spec.lua",
 }
 for _, file in ipairs(files) do
   dofile(file)
@@ -38,8 +39,8 @@ end
 assert(#tests > 0, "headless test runner loaded zero tests")
 if using_default_files then
   assert(
-    #tests == 69,
-    string.format("expected 69 default headless tests, loaded %d", #tests)
+    #tests == 79,
+    string.format("expected 79 default headless tests, loaded %d", #tests)
   )
 end
 

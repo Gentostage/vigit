@@ -4,9 +4,11 @@ local tests = {}
 local failed = 0
 local fixture_root = vim.fn.tempname()
 local finished = false
+local cleanup_callbacks = {}
 local default_files = {
   "tests/integration/process_spec.lua",
   "tests/integration/git_read_spec.lua",
+  "tests/integration/git_worktree_read_spec.lua",
   "tests/integration/git_file_mutations_spec.lua",
   "tests/integration/git_hunk_mutations_spec.lua",
   "tests/integration/git_rollback_spec.lua",
@@ -24,6 +26,9 @@ local function print_result(prefix, name, message)
 end
 
 _G.fixture = { root = fixture_root }
+_G.register_cleanup = function(callback)
+  cleanup_callbacks[#cleanup_callbacks + 1] = callback
+end
 _G.it = function(name, fn)
   tests[#tests + 1] = { name = name, fn = fn }
 end
@@ -39,7 +44,17 @@ _G.assert_truthy = function(value)
 end
 
 local function finish()
-  vim.fn.delete(fixture_root, "rf")
+  for index = #cleanup_callbacks, 1, -1 do
+    local ok, cleaned = pcall(cleanup_callbacks[index])
+    if not ok or cleaned ~= true then
+      failed = failed + 1
+      print_result("FAIL", "integration cleanup", ok and tostring(cleaned) or cleaned)
+    end
+  end
+  if vim.fn.delete(fixture_root, "rf") ~= 0 then
+    failed = failed + 1
+    print_result("FAIL", "integration cleanup", "unable to remove fixture root")
+  end
   print_result(
     "SUMMARY",
     string.format("%d tests, %d failures", #tests, failed)
