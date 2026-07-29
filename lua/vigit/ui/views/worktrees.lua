@@ -1,4 +1,3 @@
-local Result = require("vigit.core.result")
 local keymaps = require("vigit.ui.keymaps")
 
 local M = {}
@@ -154,7 +153,7 @@ function M.render(rows, maximum, selected_path, error)
     output.lines[#output.lines + 1] = "No worktrees"
   end
   output.lines[#output.lines + 1] = ""
-  output.lines[#output.lines + 1] = shorten("↵ open · [w/]w move · r refresh · F fetch · d unavailable · q close", maximum)
+  output.lines[#output.lines + 1] = shorten("↵ open · [w/]w move · r refresh · F fetch · d remove · q close", maximum)
   output.highlights[#output.highlights + 1] = { row = #output.lines, group = "Comment" }
   return output
 end
@@ -194,8 +193,9 @@ local function close(picker, return_origin)
   if active_picker == picker then active_picker = nil end
   if picker.pending_open and picker.pending_open.cancel then pcall(picker.pending_open.cancel) end
   if picker.pending_fetch and picker.pending_fetch.cancel then pcall(picker.pending_fetch.cancel) end
+  if picker.pending_remove and picker.pending_remove.cancel then pcall(picker.pending_remove.cancel) end
   if picker.pending_list and picker.pending_list.cancel then pcall(picker.pending_list.cancel) end
-  picker.pending_open, picker.pending_fetch, picker.pending_list = nil, nil, nil
+  picker.pending_open, picker.pending_fetch, picker.pending_remove, picker.pending_list = nil, nil, nil, nil
   if picker.app.dispose then
     picker.app:dispose(picker.origin, picker)
   else
@@ -350,13 +350,25 @@ function M.open(opts)
     pending.cancel = handle and handle.cancel
   end
   function picker:remove()
-    local result = Result.err(
-      "not_implemented",
-      "Safe worktree removal will be added in the next slice"
-    )
-    self.error = result.error
-    self:render_now()
-    return result
+    local target = selected(self)
+    if not target then return end
+    if self.pending_remove and self.pending_remove.cancel then pcall(self.pending_remove.cancel) end
+    local pending = {}
+    self.pending_remove = pending
+    local handle = self.app:remove(target.entry, function(result)
+      if self.pending_remove ~= pending then return end
+      self.pending_remove = nil
+      if self.closed then return end
+      if not result.ok then
+        self.error = result.error
+        self:render_now()
+        return
+      end
+      self.selected_path = self.origin.root
+      self:refresh()
+    end, self.origin)
+    pending.cancel = handle and handle.cancel
+    return handle
   end
   function picker:close() close(self, true) end
 

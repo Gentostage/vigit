@@ -264,7 +264,7 @@ M.entries = {
     modes = { "n" },
     lhs = "d",
     contexts = { "worktrees" },
-    description = "Remove selected worktree (unavailable)",
+    description = "Remove selected worktree safely",
     intent = "remove_worktree",
   },
   {

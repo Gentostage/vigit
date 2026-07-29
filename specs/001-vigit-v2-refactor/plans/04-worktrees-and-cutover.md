@@ -25,7 +25,7 @@ async `vim.system`, headless Neovim и temporary real Git repositories.
 - Remote state отражает локальные remote-tracking refs. Сеть используется
   только после явного `F`.
 - Listing допускает не более четырёх одновременных worktree probes.
-- Remove всегда повторяет status/upstream/buffer preflight после `DELETE`.
+- Remove всегда повторяет status/upstream/buffer preflight после `y`.
 - `git worktree remove` запускается без `--force`; branch не удаляется.
 - Vigit не выгружает и не закрывает обычные source/terminal buffers.
 - `:Vigit` переключается на v2 только после полного review gate.
@@ -283,7 +283,7 @@ git commit -m "feat(worktrees): add async session picker"
 
 - Produces:
   `neovim.loaded_source_buffers(root) -> BufferInfo[]`,
-  `confirm.typed(message, expected, callback)`,
+  `confirm.ask(message, callback)`,
   `git:remove_worktree(primary_root, target_root, callback)`,
   `worktrees_app:remove(entry, callback)`.
 
@@ -298,14 +298,14 @@ boundaries, so `/repo/wt-two` does not match `/repo/wt-two-old`.
 Vigit-owned `nofile` buffers and terminal buffers do not count as source
 buffers.
 
-- [ ] **Step 2: Написать typed confirmation test**
+- [ ] **Step 2: Написать y/N confirmation test**
 
-Mock `vim.ui.input` and assert only exact `DELETE` succeeds. Empty, Esc,
-`delete`, surrounding whitespace and stale callback all cancel.
+Mock `vim.fn.confirm` and assert only `y` succeeds. `n`, empty, Esc and Enter
+cancel because No is the default.
 
 ```lua
-confirm.typed("Type DELETE to remove …", "DELETE", done)
-input_callback("DELETE")
+confirm.ask("Remove worktree …?", done)
+confirm_callback(true)
 assert_equal(confirmed, true)
 ```
 
@@ -314,7 +314,7 @@ assert_equal(confirmed, true)
 For a safe pushed linked worktree:
 
 1. complete initial preflight;
-2. accept `DELETE`;
+2. accept `y`;
 3. dirty the target before revalidation and assert no remove command runs;
 4. clean it, retry and assert directory/registration disappear;
 5. assert branch ref remains;
@@ -331,7 +331,7 @@ nvim --headless --clean -u NONE -l tests/integration/run.lua tests/integration/g
 nvim --headless --clean -u NONE -l tests/headless/run.lua tests/headless/worktree_remove_spec.lua
 ```
 
-Expected: FAIL because typed confirmation/removal are absent.
+Expected: FAIL because y/N confirmation/removal are absent.
 
 - [ ] **Step 5: Усилить loaded source inspection**
 
@@ -347,7 +347,7 @@ mappings/autocmds or close buffers.
 `remove` performs:
 
 1. pure policy check against current picker model;
-2. typed `DELETE`;
+2. `y/N` confirmation with default No;
 3. fresh worktree list, target status, upstream and loaded-buffer reads;
 4. pure policy check of the fresh entry;
 5. `{ "git", "-C", primary_root, "worktree", "remove", "--", target_root }`;
@@ -685,7 +685,7 @@ git commit -m "refactor!: cut over to vigit v2"
 ### Slice 4 Review Gate
 
 - [ ] Picker distinguishes ROOT/WT and never performs implicit fetch.
-- [ ] Remove revalidates safety, requires exact `DELETE` and keeps branch.
+- [ ] Remove revalidates safety, requires explicit `y` and keeps branch.
 - [ ] Only owned Vigit resources close after successful removal.
 - [ ] Help/header/docs are generated from one keymap registry.
 - [ ] `:Vigit` and `:VigitV2` reach the same v2 session.

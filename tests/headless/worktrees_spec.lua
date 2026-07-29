@@ -30,8 +30,6 @@ it("открывает picker worktree, различает ROOT и WT и фок�
     for _, lhs in ipairs({ "[w", "]w", "r", "F", "d", "q" }) do
       assert_equal(vim.fn.maparg(lhs, "n", false, true).buffer, 1)
     end
-    assert_equal(picker:remove().error.code, "not_implemented")
-
     local linked_row = picker.row_by_path[vim.uv.fs_realpath(linked)]
     vim.api.nvim_win_set_cursor(picker.win, { linked_row, 0 })
     picker:select()

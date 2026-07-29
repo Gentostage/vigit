@@ -144,24 +144,40 @@ local function changed_count(entry)
   return count(entry) or 0
 end
 
-local function loaded_within(entry_path, loaded_paths)
+local function is_windows(platform)
+  platform = tostring(platform or ""):lower()
+  return platform == "win32" or platform == "windows" or platform == "windows_nt"
+end
+
+local function loaded_within(entry_path, loaded_paths, platform)
   if type(entry_path) ~= "string" or type(loaded_paths) ~= "table" then
     return false
   end
-  local windows_path = entry_path:match("^%a:[/\\]") ~= nil
-    or entry_path:sub(1, 2) == "\\\\"
+  local windows_path = is_windows(platform)
+  if platform == nil then
+    windows_path = entry_path:match("^%a:[/\\]") ~= nil
+      or entry_path:sub(1, 2) == "\\\\"
+  end
+  local root = entry_path
+  if windows_path then
+    root = root:gsub("\\", "/"):lower()
+  end
+  root = root:gsub("/+$", "")
   for key, value in pairs(loaded_paths) do
     local candidate = type(value) == "string" and value or key
-    local boundary = type(candidate) == "string" and candidate:sub(#entry_path + 1, #entry_path + 1)
-    if type(candidate) == "string" and candidate:sub(1, #entry_path) == entry_path
-        and (boundary == "/" or (windows_path and boundary == "\\")) then
+    if windows_path and type(candidate) == "string" then
+      candidate = candidate:gsub("\\", "/"):lower()
+    end
+    candidate = type(candidate) == "string" and candidate:gsub("/+$", "") or candidate
+    if type(candidate) == "string" and (candidate == root
+        or candidate:sub(1, #root + 1) == root .. "/") then
       return true
     end
   end
   return false
 end
 
-function M.removal_blocker(entry, loaded_paths)
+function M.removal_blocker(entry, loaded_paths, platform)
   entry = entry or {}
   if entry.kind == "root" then return "root" end
   if entry.locked then return "locked" end
@@ -173,7 +189,7 @@ function M.removal_blocker(entry, loaded_paths)
     return "no_upstream"
   end
   if (tonumber(upstream.ahead) or 0) > 0 then return "ahead" end
-  if loaded_within(entry.path, loaded_paths) then return "loaded_source_buffer" end
+  if loaded_within(entry.path, loaded_paths, platform) then return "loaded_source_buffer" end
   return nil
 end
 

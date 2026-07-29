@@ -154,7 +154,7 @@ upstream state, может открыть либо безопасно удали
 2. **Given** dirty, ahead либо no-upstream worktree, **When** запрошено
    удаление, **Then** Vigit показывает конкретную причину блокировки.
 3. **Given** clean worktree с `ahead=0` и без открытых buffers, **When**
-   пользователь вводит `DELETE`, **Then** выполняется `git worktree remove`
+   пользователь подтверждает `y`, **Then** выполняется `git worktree remove`
    без `--force`, а branch сохраняется.
 4. **Given** remote-tracking state, **When** пользователь нажимает `F`, **Then**
    выполняется явный fetch и upstream status пересчитывается.
@@ -225,7 +225,7 @@ upstream state, может открыть либо безопасно удали
   ahead и behind.
 - **FR-032**: Worktree removal MUST блокироваться для root, dirty, ahead,
   no-upstream или открытых source buffers.
-- **FR-033**: Worktree removal MUST использовать typed confirmation `DELETE`,
+- **FR-033**: Worktree removal MUST использовать confirmation `y/N` с default No,
   не использовать `--force` и сохранять branch.
 - **FR-034**: Network fetch MUST выполняться только явным действием.
 - **FR-035**: Все Vigit keymaps MUST быть buffer-local и происходить из одного

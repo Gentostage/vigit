@@ -119,8 +119,9 @@ checkbox хранит status, HTML block хранит anchor metadata.
 ## Worktree removal
 
 **Decision**: Блокировать remove для root, dirty, no-upstream, ahead>0,
-locked/prunable или любого loaded source buffer под target root. После typed
-`DELETE` повторить preflight и вызвать remove без force из другой worktree.
+locked/prunable или любого loaded source buffer под target root. После
+подтверждения `y` повторить preflight и вызвать remove без force из другой
+worktree.
 
 **Rationale**: Vigit закрывает только owned review tab и не решает судьбу
 пользовательских buffers/branches.

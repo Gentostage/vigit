@@ -117,11 +117,15 @@ worktrees = Worktrees.new({
   neovim = {
     canonical_root = worktree_root,
     focus_session = focus_existing,
+    loaded_source_buffers = neovim.loaded_source_buffers,
     platform = (vim.uv.os_uname().sysname == "Windows_NT") and "win32" or "posix",
   },
   concurrency = 4,
   open_session = function(root)
     return M.open({ cwd = root })
+  end,
+  close_session = function(session)
+    controller.dispatch(session, "close")
   end,
 })
 

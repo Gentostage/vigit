@@ -232,7 +232,7 @@ branch, file counts, upstream и ahead/behind. Remote state явно помеч�
 4. `ahead == 0`;
 5. нет loaded source buffers под canonical target path.
 
-После typed `DELETE` команда запускается из другой worktree через
+После подтверждения `y` команда запускается из другой worktree через
 `git worktree remove <path>` без `--force`. При успехе закрывается только owned
 Vigit-tab; branch сохраняется.
 

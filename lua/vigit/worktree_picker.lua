@@ -1,5 +1,6 @@
 local git = require("vigit.git")
 local keymaps = require("vigit.keymaps")
+local confirm = require("vigit.ui.confirm")
 local worktrees = require("vigit.worktrees")
 
 local M = {}
@@ -171,14 +172,12 @@ local function remove_selected(picker)
     end
   end
   local deleting_current = entry.path == picker.session.root
-  vim.ui.input({
-    prompt = string.format(
-      "Remove WT %s (%s, pushed and clean)? Branch will be kept. Type DELETE: ",
-      entry.name,
-      entry.branch
-    ),
-  }, function(answer)
-    if answer ~= "DELETE" then
+  confirm.ask(string.format(
+    "Remove WT %s (%s)? Branch will be kept.",
+    entry.name,
+    entry.branch
+  ), function(accepted)
+    if not accepted then
       notify("Worktree removal cancelled")
       return
     end

@@ -436,6 +436,42 @@ function Git:worktrees(root, callback)
   end)
 end
 
+function Git:remove_worktree(primary_root, target_root, callback)
+  local cancelled = false
+  local completed = false
+  local function complete(result)
+    if cancelled or completed then return end
+    completed = true
+    callback(result)
+  end
+  local handle = self.process.run({
+    "git",
+    "-C",
+    primary_root,
+    "worktree",
+    "remove",
+    "--",
+    target_root,
+  }, {}, function(result)
+    if not result.ok then
+      complete(Result.err(
+        "git_failed",
+        "Git worktree removal failed",
+        result.error and (result.error.details or result.error.message)
+      ))
+      return
+    end
+    complete(Result.ok(true))
+  end)
+  return {
+    cancel = function()
+      if cancelled then return end
+      cancelled = true
+      if handle and handle.cancel then handle.cancel() end
+    end,
+  }
+end
+
 function Git:worktree_status(root, callback)
   return self.process.run({
     "git",

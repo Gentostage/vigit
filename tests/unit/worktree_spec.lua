@@ -257,6 +257,17 @@ it("only blocks loaded source paths within the exact worktree path", function()
   }), "loaded_source_buffer")
 end)
 
+it("normalizes Windows loaded source paths without matching sibling prefixes", function()
+  local entry = {
+    kind = "linked",
+    path = "C:\\Repo\\Wt-Two",
+    upstream = { state = "tracking", source = "local_refs", ahead = 0, behind = 0 },
+  }
+
+  assert_equal(worktree.removal_blocker(entry, { "c:/repo/wt-two/SOURCE.lua" }), "loaded_source_buffer")
+  assert_equal(worktree.removal_blocker(entry, { "C:\\REPO\\WT-TWO-OLD\\source.lua" }), nil)
+end)
+
 it("uses component-safe Windows loaded-source containment without rewriting path bytes", function()
   local entry = {
     kind = "linked",
@@ -270,6 +281,45 @@ it("uses component-safe Windows loaded-source containment without rewriting path
   assert_equal(worktree.removal_blocker(entry, {
     "C:\\Projects\\Feature\\src\\a.lua",
   }), "loaded_source_buffer")
+end)
+
+it("treats Windows UNC slash spellings as the same worktree path", function()
+  local upstream = { state = "tracking", source = "local_refs", ahead = 0, behind = 0 }
+  local backslash_entry = {
+    kind = "linked",
+    path = "\\\\Server\\Share\\Feature",
+    upstream = upstream,
+  }
+  local slash_entry = {
+    kind = "linked",
+    path = "//Server/Share/Feature",
+    upstream = upstream,
+  }
+
+  assert_equal(worktree.removal_blocker(backslash_entry, {
+    "//server/share/feature/src/a.lua",
+  }, "win32"), "loaded_source_buffer")
+  assert_equal(worktree.removal_blocker(slash_entry, {
+    "\\\\server\\share\\feature\\src\\a.lua",
+  }, "win32"), "loaded_source_buffer")
+  assert_equal(worktree.removal_blocker(backslash_entry, {
+    "//server/share/feature-copy/src/a.lua",
+  }, "win32"), nil)
+end)
+
+it("does not reinterpret POSIX double-slash roots as Windows UNC", function()
+  local entry = {
+    kind = "linked",
+    path = "//tmp/feature\\copy",
+    upstream = { state = "tracking", source = "local_refs", ahead = 0, behind = 0 },
+  }
+
+  assert_equal(worktree.removal_blocker(entry, {
+    "//tmp/feature\\copy\\src/a.lua",
+  }, "posix"), nil)
+  assert_equal(worktree.removal_blocker(entry, {
+    "//tmp/feature\\copy/src/a.lua",
+  }, "posix"), "loaded_source_buffer")
 end)
 
 it("does not treat POSIX backslashes as path separators", function()

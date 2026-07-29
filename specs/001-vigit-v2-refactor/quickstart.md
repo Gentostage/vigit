@@ -79,7 +79,7 @@ Expected: every suite prints `PASS` and exits 0. После cutover те же к
 
 1. Create a local bare remote and linked clean pushed worktree.
 2. Verify dirty, no-upstream, ahead and open-buffer targets are blocked.
-3. Type `DELETE` for a safe target.
+3. Press `y` for a safe target; `n`, `<Esc>` and `<Enter>` cancel.
 4. Verify directory/registration removed, branch kept and unrelated tabs open.
 5. Run `:Vigit`; verify it opens v2 and `:VigitV2` remains a temporary alias.
 

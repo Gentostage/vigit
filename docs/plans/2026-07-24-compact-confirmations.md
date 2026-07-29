@@ -16,7 +16,7 @@
 ## Global Constraints
 
 - `y` подтверждает; `n`, `<Esc>` и `<Enter>` отменяют.
-- Worktree продолжает требовать точный ввод `DELETE`.
+- Worktree использует тот же `y/N` flow с default No и повторным preflight.
 - Не изменять диалоги установки Codex skill и comment editor.
 - Не создавать commit/push без отдельного запроса.
 

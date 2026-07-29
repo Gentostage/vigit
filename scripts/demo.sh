@@ -2,7 +2,7 @@
 set -euo pipefail
 
 usage() {
-  printf 'Usage: %s [--user-config|--plugins]\n' "${0##*/}" >&2
+  printf 'Usage: %s [--user-config|--plugins|--check]\n' "${0##*/}" >&2
 }
 
 MODE=clean
@@ -18,6 +18,9 @@ if [[ $# -eq 1 ]]; then
     --plugins)
       MODE=plugins
       ;;
+    --check)
+      MODE=check
+      ;;
     *)
       usage
       exit 2
@@ -28,9 +31,11 @@ fi
 ROOT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
 DEMO_DIR="$(mktemp -d "${TMPDIR:-/tmp}/vigit-demo.XXXXXX")"
 SECONDARY_DIR="${DEMO_DIR}-secondary"
+REMOVABLE_DIR="${DEMO_DIR}-removable"
+REMOTE_DIR="${DEMO_DIR}-origin.git"
 
 cleanup() {
-  rm -rf -- "$SECONDARY_DIR" "$DEMO_DIR"
+  rm -rf -- "$SECONDARY_DIR" "$REMOVABLE_DIR" "$REMOTE_DIR" "$DEMO_DIR"
 }
 trap cleanup EXIT
 
@@ -144,7 +149,14 @@ write_large_pipeline baseline
 
 git -C "$DEMO_DIR" add README.md lua/demo/calculator.lua lua/demo/legacy.lua "$PIPELINE_PATH"
 git -C "$DEMO_DIR" commit -q -m "demo baseline"
-git -C "$DEMO_DIR" worktree add -q -b demo-secondary "$SECONDARY_DIR"
+git -C "$DEMO_DIR" branch -M main
+git init -q --bare "$REMOTE_DIR"
+git -C "$DEMO_DIR" remote add origin "$REMOTE_DIR"
+git -C "$DEMO_DIR" push -q -u origin main
+git -C "$DEMO_DIR" worktree add -q -b demo-secondary "$SECONDARY_DIR" main
+git -C "$SECONDARY_DIR" push -q -u origin demo-secondary
+git -C "$DEMO_DIR" worktree add -q -b demo-removable "$REMOVABLE_DIR" main
+git -C "$REMOVABLE_DIR" push -q -u origin demo-removable
 
 mkdir -p "$SECONDARY_DIR/lua/demo/tasks" "$SECONDARY_DIR/notes"
 
@@ -240,9 +252,18 @@ VIGIT_ROOT="$ROOT_DIR" VIGIT_REVIEW_ROOT="$SECONDARY_DIR" nvim --headless --clea
   -c 'lua local review=require("vigit.review"); local issue,issue_err=review.add(vim.env.VIGIT_REVIEW_ROOT,{type="COMMENT",file="README.md",line=3,line_end=3,section="unstaged",comment="Clarify why this task is isolated in a linked worktree.",context="An independent AI-agent task running in a linked Git worktree."}); assert(issue,issue_err)' \
   -c qa
 
+if [[ "$MODE" == check ]]; then
+  test -z "$(git -C "$REMOVABLE_DIR" status --porcelain=v1)"
+  test "$(git -C "$REMOVABLE_DIR" rev-parse --abbrev-ref '@{upstream}')" = "origin/demo-removable"
+  printf '%s\n' 'Demo removable worktree: clean · upstream origin/demo-removable'
+  exit 0
+fi
+
 printf 'Vigit demo repository: %s\n' "$DEMO_DIR"
 printf 'Secondary worktree: %s\n' "$SECONDARY_DIR"
+printf 'Removable worktree: %s\n' "$REMOVABLE_DIR"
 printf '%s\n' 'Try worktrees: press w, select WT demo-secondary, then press Enter.'
+printf '%s\n' 'Try safe removal: select WT demo-removable, press d, then press y.'
 printf '%s\n' 'Try comments: press C in demo-secondary, then Enter/e/d.'
 printf '%s\n' 'Close Neovim to remove it.'
 

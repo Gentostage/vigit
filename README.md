@@ -205,7 +205,7 @@ completed comments manually.
 
 Use `:VigitWorktrees` or `w` to open the worktree modal. Selecting a worktree
 focuses its existing Vigit tab or opens a new tab with a tab-local working
-directory. Inside the modal, `d` removes a linked `WT` after typing `DELETE`;
+directory. Inside the modal, `d` removes a linked `WT` after a `y/N` prompt;
 the Git branch is always kept. `PUSHED`, `↑N`, `↓N`, and `NO UPSTREAM` show
 the relationship with the configured upstream. Vigit allows removal only when
 the worktree is not `ROOT`, its Git status is clean, and `ahead == 0`. If that
@@ -213,7 +213,7 @@ worktree has an open Vigit tab, Vigit closes it automatically. Unsaved editor
 buffers, uncommitted files, detached HEAD, a missing upstream, or unpushed
 commits block removal with an exact reason. The check uses local remote-tracking
 refs and never performs a hidden network fetch. Vigit repeats the safety check
-after the `DELETE` confirmation, immediately before closing and removing the
+after the `y` confirmation, immediately before closing and removing the
 worktree.
 
 ## Plugin-friendly edit mode

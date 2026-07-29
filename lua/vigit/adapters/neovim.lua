@@ -25,6 +25,20 @@ local function canonical_path(path)
   return vim.uv.fs_realpath(path)
 end
 
+local function absolute_path(path)
+  if is_windows then
+    return path:match("^%a:[/\\\\]") ~= nil
+      or path:sub(1, 2) == "\\\\"
+      or path:sub(1, 2) == "//"
+  end
+  return path:sub(1, 1) == "/"
+end
+
+local function missing_path(path)
+  local stat, _, code = vim.uv.fs_lstat(path)
+  return stat == nil and code == "ENOENT"
+end
+
 local function source_label(context)
   local branch = context.branch
   if type(branch) ~= "string" or branch == "" then
@@ -120,7 +134,11 @@ end
 function M.loaded_source_buffers(root)
   local canonical_root = canonical_path(root)
   if not canonical_root then
-    return {}
+    return Result.err(
+      "repository_root_unavailable",
+      "Repository root cannot be canonicalized",
+      root
+    )
   end
 
   local buffers = {}
@@ -129,13 +147,28 @@ function M.loaded_source_buffers(root)
         and vim.api.nvim_buf_is_loaded(buffer)
         and vim.bo[buffer].buftype == "" then
       local name = vim.api.nvim_buf_get_name(buffer)
-      local path = name ~= "" and canonical_path(name) or nil
-      if path and is_within(canonical_root, path) then
-        buffers[#buffers + 1] = {
-          buf = buffer,
-          path = path,
-        }
+      if name ~= "" then
+        if missing_path(name)
+            and absolute_path(name)
+            and not is_within(canonical_root, name) then
+          goto continue
+        end
+        local path = canonical_path(name)
+        if not path then
+          return Result.err(
+            "source_buffer_unavailable",
+            "Loaded source buffer cannot be canonicalized",
+            name
+          )
+        end
+        if is_within(canonical_root, path) then
+          buffers[#buffers + 1] = {
+            buf = buffer,
+            path = path,
+          }
+        end
       end
+      ::continue::
     end
   end
   table.sort(buffers, function(first, second)
@@ -144,7 +177,7 @@ function M.loaded_source_buffers(root)
     end
     return first.path < second.path
   end)
-  return buffers
+  return Result.ok(buffers)
 end
 
 function M.open_file(context, done)

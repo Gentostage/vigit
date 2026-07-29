@@ -404,12 +404,10 @@ test("d closes and removes an open clean pushed worktree", function()
   local linked_editor_tab = linked_session.editor.tab
   vim.api.nvim_set_current_tabpage(linked_session.vigit_tab)
   local picker = require("vigit.worktree_picker").open(linked_session)
-  local old_input = vim.ui.input
-  vim.ui.input = function(_, callback)
-    callback("DELETE")
-  end
+  local old_confirm = vim.fn.confirm
+  vim.fn.confirm = function() return 1 end
   local ok, err = pcall(require("vigit.worktree_picker").remove_selected, picker)
-  vim.ui.input = old_input
+  vim.fn.confirm = old_confirm
   assert(ok, err)
   assert(
     not vim.api.nvim_tabpage_is_valid(linked_editor_tab),

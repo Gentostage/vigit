@@ -56,9 +56,10 @@ it("blocks worktree removal before confirmation when safety checks fail", functi
     notify = function(message)
       warning = message
     end,
-    ui = {
-      input = function()
+    fn = {
+      confirm = function()
         prompted = true
+        return 2
       end,
     },
     api = {
@@ -136,9 +137,12 @@ it("closes and removes an open clean pushed worktree while keeping its branch", 
   with_fake_vim({
     log = { levels = { INFO = 2, WARN = 3, ERROR = 4 } },
     notify = function() end,
-    ui = {
-      input = function(_, callback)
-        callback("DELETE")
+    fn = {
+      confirm = function(message, choices, default)
+        assert_equal(message, "Remove WT wt (feature)? Branch will be kept.")
+        assert_equal(choices, "&Yes\n&No")
+        assert_equal(default, 2)
+        return 1
       end,
     },
     api = {
@@ -182,7 +186,7 @@ it("closes and removes an open clean pushed worktree while keeping its branch", 
   reset_picker()
 end)
 
-it("revalidates worktree safety after DELETE confirmation", function()
+it("revalidates worktree safety after y confirmation", function()
   reset_picker()
   local removal_attempted = false
   local warning = nil
@@ -230,9 +234,9 @@ it("revalidates worktree safety after DELETE confirmation", function()
     notify = function(message)
       warning = message
     end,
-    ui = {
-      input = function(_, callback)
-        callback("DELETE")
+    fn = {
+      confirm = function()
+        return 1
       end,
     },
     api = {
