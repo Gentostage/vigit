@@ -32,10 +32,18 @@ ROOT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
 DEMO_DIR="$(mktemp -d "${TMPDIR:-/tmp}/vigit-demo.XXXXXX")"
 SECONDARY_DIR="${DEMO_DIR}-secondary"
 REMOVABLE_DIR="${DEMO_DIR}-removable"
+AHEAD_DIR="${DEMO_DIR}-ahead"
+NO_UPSTREAM_DIR="${DEMO_DIR}-no-upstream"
 REMOTE_DIR="${DEMO_DIR}-origin.git"
 
 cleanup() {
-  rm -rf -- "$SECONDARY_DIR" "$REMOVABLE_DIR" "$REMOTE_DIR" "$DEMO_DIR"
+  rm -rf -- \
+    "$SECONDARY_DIR" \
+    "$REMOVABLE_DIR" \
+    "$AHEAD_DIR" \
+    "$NO_UPSTREAM_DIR" \
+    "$REMOTE_DIR" \
+    "$DEMO_DIR"
 }
 trap cleanup EXIT
 
@@ -157,6 +165,17 @@ git -C "$DEMO_DIR" worktree add -q -b demo-secondary "$SECONDARY_DIR" main
 git -C "$SECONDARY_DIR" push -q -u origin demo-secondary
 git -C "$DEMO_DIR" worktree add -q -b demo-removable "$REMOVABLE_DIR" main
 git -C "$REMOVABLE_DIR" push -q -u origin demo-removable
+git -C "$DEMO_DIR" worktree add -q -b demo-ahead "$AHEAD_DIR" main
+git -C "$AHEAD_DIR" push -q -u origin demo-ahead
+git -C "$DEMO_DIR" worktree add -q -b demo-no-upstream "$NO_UPSTREAM_DIR" main
+
+mkdir -p "$AHEAD_DIR/notes"
+printf '%s\n' \
+  '# Local commit' \
+  '' \
+  'This clean worktree is one commit ahead of origin/demo-ahead.' > "$AHEAD_DIR/notes/ahead.md"
+git -C "$AHEAD_DIR" add notes/ahead.md
+git -C "$AHEAD_DIR" commit -q -m "demo ahead state"
 
 mkdir -p "$SECONDARY_DIR/lua/demo/tasks" "$SECONDARY_DIR/notes"
 
@@ -199,6 +218,14 @@ printf '%s\n' \
   '- Check the new maximum calculation.' \
   '- Keep this file untracked for the demo.' > "$SECONDARY_DIR/notes/agent-review.md"
 
+VIGIT_ROOT="$ROOT_DIR" VIGIT_REVIEW_ROOT="$SECONDARY_DIR" nvim --headless --clean -u NONE \
+  --cmd 'lua vim.opt.runtimepath:prepend(vim.env.VIGIT_ROOT)' \
+  -c 'lua local reviews=require("vigit.application.reviews"); local session={root=vim.env.VIGIT_REVIEW_ROOT}; local open=reviews.add(session,{path="README.md",line=3,side="new",section="unstaged",context="An independent AI-agent task running in a linked Git worktree."},"Clarify why this task is isolated in a linked worktree."); assert(open.ok,open.error and open.error.message); local done=reviews.add(session,{path="lua/demo/calculator.lua",line=12,side="new",section="unstaged",context="  return math.max(unpack(items))"},"Check the maximum calculation before handoff."); assert(done.ok,done.error and done.error.message); local updated=reviews.update(session,done.value.id,nil,{done=true,response="Verified the calculation and kept the task isolated."}); assert(updated.ok,updated.error and updated.error.message)' \
+  -c qa
+
+git -C "$SECONDARY_DIR" add .vigit/comments.md
+git -C "$SECONDARY_DIR" commit -q -m "add canonical review fixture" -- .vigit/comments.md
+git -C "$SECONDARY_DIR" push -q
 git -C "$SECONDARY_DIR" add lua/demo/tasks/worktree_task.lua
 
 printf '%s\n' \
@@ -243,18 +270,39 @@ printf '%s\n' \
 write_large_pipeline staged
 write_large_formatter
 
-git -C "$DEMO_DIR" add README.md lua/demo/format.lua "$PIPELINE_PATH" "$FORMATTER_PATH"
+git -C "$DEMO_DIR" add \
+  README.md \
+  lua/demo/format.lua \
+  lua/demo/legacy.lua \
+  "$PIPELINE_PATH" \
+  "$FORMATTER_PATH"
 
 write_large_pipeline working
 
-VIGIT_ROOT="$ROOT_DIR" VIGIT_REVIEW_ROOT="$SECONDARY_DIR" nvim --headless --clean -u NONE \
-  --cmd 'lua vim.opt.runtimepath:prepend(vim.env.VIGIT_ROOT)' \
-  -c 'lua local review=require("vigit.review"); local issue,issue_err=review.add(vim.env.VIGIT_REVIEW_ROOT,{type="COMMENT",file="README.md",line=3,line_end=3,section="unstaged",comment="Clarify why this task is isolated in a linked worktree.",context="An independent AI-agent task running in a linked Git worktree."}); assert(issue,issue_err)' \
-  -c qa
-
 if [[ "$MODE" == check ]]; then
+  test -n "$(git -C "$DEMO_DIR" status --porcelain=v1)"
+  test -n "$(git -C "$SECONDARY_DIR" status --porcelain=v1)"
   test -z "$(git -C "$REMOVABLE_DIR" status --porcelain=v1)"
   test "$(git -C "$REMOVABLE_DIR" rev-parse --abbrev-ref '@{upstream}')" = "origin/demo-removable"
+  test -z "$(git -C "$AHEAD_DIR" status --porcelain=v1)"
+  test "$(git -C "$AHEAD_DIR" rev-parse --abbrev-ref '@{upstream}')" = "origin/demo-ahead"
+  test "$(git -C "$AHEAD_DIR" rev-list --count '@{upstream}..HEAD')" = "1"
+  test -z "$(git -C "$NO_UPSTREAM_DIR" status --porcelain=v1)"
+  if git -C "$NO_UPSTREAM_DIR" rev-parse --verify '@{upstream}' >/dev/null 2>&1; then
+    echo "Demo no-upstream worktree unexpectedly has an upstream" >&2
+    exit 1
+  fi
+  git -C "$SECONDARY_DIR" ls-files --error-unmatch .vigit/comments.md >/dev/null
+  COMMENTS="$(<"$SECONDARY_DIR/.vigit/comments.md")"
+  [[ "$COMMENTS" == *"## [ ] VIGIT-001"* ]]
+  [[ "$COMMENTS" == *"## [x] VIGIT-002"* ]]
+  [[ "$COMMENTS" == *"Verified the calculation and kept the task isolated."* ]]
+  test "$(git -C "$DEMO_DIR" diff --cached --name-status -- lua/demo/legacy.lua)" \
+    = $'D\tlua/demo/legacy.lua'
+  test "$(git -C "$DEMO_DIR" diff --name-only -- "$PIPELINE_PATH")" \
+    = "$PIPELINE_PATH"
+  printf '%s\n' \
+    'Demo fixture: safe · dirty · ahead · no upstream · tracked open/completed comments'
   printf '%s\n' 'Demo removable worktree: clean · upstream origin/demo-removable'
   exit 0
 fi
@@ -262,7 +310,9 @@ fi
 printf 'Vigit demo repository: %s\n' "$DEMO_DIR"
 printf 'Secondary worktree: %s\n' "$SECONDARY_DIR"
 printf 'Removable worktree: %s\n' "$REMOVABLE_DIR"
-printf '%s\n' 'Try worktrees: press w, select WT demo-secondary, then press Enter.'
+printf 'Ahead worktree: %s\n' "$AHEAD_DIR"
+printf 'No-upstream worktree: %s\n' "$NO_UPSTREAM_DIR"
+printf '%s\n' 'Try worktrees: press W, select WT demo-secondary, then press Enter.'
 printf '%s\n' 'Try safe removal: select WT demo-removable, press d, then press y.'
 printf '%s\n' 'Try comments: press C in demo-secondary, then Enter/e/d.'
 printf '%s\n' 'Close Neovim to remove it.'

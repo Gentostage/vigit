@@ -197,6 +197,88 @@ it("рендерит completed probes во время loading и не переп
   end
 end)
 
+it("рендерит literal upstream safety matrix из local refs", function()
+  local view = require("vigit.ui.views.worktrees")
+  local upstreams = {
+    {
+      name = "wt-equal",
+      value = {
+        state = "tracking",
+        name = "origin/main",
+        source = "local_refs",
+        ahead = 0,
+        behind = 0,
+      },
+    },
+    {
+      name = "wt-ahead",
+      value = {
+        state = "tracking",
+        name = "origin/ahead",
+        source = "local_refs",
+        ahead = 1,
+        behind = 0,
+      },
+    },
+    {
+      name = "wt-behind",
+      value = {
+        state = "tracking",
+        name = "origin/behind",
+        source = "local_refs",
+        ahead = 0,
+        behind = 2,
+      },
+    },
+    {
+      name = "wt-no-upstream",
+      value = { state = "no_upstream" },
+    },
+  }
+  local rows = {}
+  for index, item in ipairs(upstreams) do
+    rows[index] = {
+      kind = "linked",
+      path = "/repo/" .. item.name,
+      name = item.name,
+      branch = "feature/" .. index,
+      files = { staged = 0, unstaged = 0, untracked = 0 },
+      upstream = item.value,
+      probes = {
+        status = { state = "ok" },
+        upstream = { state = "ok" },
+      },
+    }
+  end
+
+  local lines = view.render(rows, 120).lines
+  local function row(name)
+    for _, line in ipairs(lines) do
+      if line:find(name, 1, true) then return vim.trim(line) end
+    end
+  end
+
+  local equal = assert(row("wt-equal"))
+  assert_truthy(equal:find("origin/main · local refs", 1, true) ~= nil)
+  assert_equal(equal:find("↑", 1, true), nil)
+  assert_equal(equal:find("↓", 1, true), nil)
+  assert_truthy(assert(row("wt-ahead")):find(
+    "origin/ahead · local refs ↑1",
+    1,
+    true
+  ) ~= nil)
+  assert_truthy(assert(row("wt-behind")):find(
+    "origin/behind · local refs ↓2",
+    1,
+    true
+  ) ~= nil)
+  assert_truthy(assert(row("wt-no-upstream")):find(
+    "no upstream",
+    1,
+    true
+  ) ~= nil)
+end)
+
 it("derives the worktree footer from enabled mappings without overflow", function()
   local config = require("vigit.config")
   local view = require("vigit.ui.views.worktrees")

@@ -90,6 +90,125 @@ it("restore_hunk returns unstage_first for a staged rendered hunk without callin
   end)
 end)
 
+it("restore_hunk asks y/N and does not mutate after No", function()
+  with_controller(function(harness)
+    local unstaged = change("unstaged", "M", "file.txt")
+    local session = Session.new({ id = "confirm-hunk", root = "/repo" })
+    session.owned.diff_win, session.owned.diff_buf = "diff", "diffbuf"
+    session.owned.changes_win, session.owned.changes_buf = "changes", "changesbuf"
+    session.data.status = { staged = {}, unstaged = { unstaged } }
+    local hunk_id = unstaged.id .. "\0" .. "1:1"
+    local file_diff = {
+      id = unstaged.id,
+      change = unstaged,
+      section = unstaged.section,
+      path = unstaged.path,
+      headers = {
+        "diff --git a/file.txt b/file.txt",
+        "--- a/file.txt",
+        "+++ b/file.txt",
+      },
+      hunks = {
+        { id = hunk_id, patch = "@@ -1 +1 @@\n-old\n+new" },
+      },
+    }
+    session.data.diffs[unstaged.id] = file_diff
+    local calls = 0
+    harness.controller.configure({
+      changes = {
+        git = {
+          diff = function(_, _, _, _, _, callback)
+            callback(Result.ok(file_diff))
+          end,
+          restore_hunk = function()
+            calls = calls + 1
+          end,
+        },
+      },
+      registry = { remove = function() end },
+    })
+    harness.set_target({
+      change_id = unstaged.id,
+      hunk_id = hunk_id,
+      path = unstaged.path,
+      section = unstaged.section,
+    })
+
+    harness.controller.dispatch(session, "restore_hunk")
+
+    assert_truthy(harness.confirmation())
+    assert_equal(calls, 0)
+  end)
+end)
+
+it("restore_hunk calls the exact adapter scope and refreshes after Yes", function()
+  with_controller(function(harness)
+    local unstaged = change("unstaged", "M", "file.txt")
+    local session = Session.new({ id = "restore-hunk-yes", root = "/repo" })
+    session.owned.diff_win, session.owned.diff_buf = "diff", "diffbuf"
+    session.owned.changes_win, session.owned.changes_buf = "changes", "changesbuf"
+    session.data.status = { staged = {}, unstaged = { unstaged } }
+    local hunk_id = unstaged.id .. "\0" .. "1:1"
+    local selected = {
+      id = hunk_id,
+      patch = "@@ -1 +1 @@\n-old\n+new",
+    }
+    local file_diff = {
+      id = unstaged.id,
+      change = unstaged,
+      section = unstaged.section,
+      path = unstaged.path,
+      headers = {
+        "diff --git a/file.txt b/file.txt",
+        "--- a/file.txt",
+        "+++ b/file.txt",
+      },
+      hunks = { selected },
+    }
+    session.data.diffs[unstaged.id] = file_diff
+    local adapter_calls = 0
+    local refreshes = 0
+    harness.controller.configure({
+      changes = {
+        git = {
+          diff = function(_, root, actual_change, _, _, callback)
+            assert_equal(root, "/repo")
+            assert_equal(actual_change, unstaged)
+            callback(Result.ok(file_diff))
+          end,
+          restore_hunk = function(_, root, actual_diff, actual_hunk, callback)
+            adapter_calls = adapter_calls + 1
+            assert_equal(root, "/repo")
+            assert_equal(actual_diff, file_diff)
+            assert_equal(actual_hunk, selected)
+            session.data.status = { staged = {}, unstaged = {} }
+            callback(Result.ok(true))
+          end,
+        },
+        refresh = function(_, active, callback)
+          refreshes = refreshes + 1
+          assert_equal(active, session)
+          callback({ phase = "status", result = Result.ok(active.data.status) })
+        end,
+      },
+      registry = { remove = function() end },
+    })
+    harness.set_target({
+      change_id = unstaged.id,
+      hunk_id = hunk_id,
+      path = unstaged.path,
+      section = unstaged.section,
+    })
+    harness.set_confirmation(true)
+
+    harness.controller.dispatch(session, "restore_hunk")
+
+    assert_equal(adapter_calls, 1)
+    assert_equal(refreshes, 1)
+    assert_equal(session.view.selected_change_id, nil)
+  end)
+end)
+
 it("restore_file rejects a changed Change after Yes before invoking the adapter", function()
   with_controller(function(harness)
     local original = change("unstaged", "M", "file.txt")
@@ -118,9 +237,52 @@ it("restore_file rejects a changed Change after Yes before invoking the adapter"
   end)
 end)
 
-it("restore_file asks y/N and does not mutate after No", function()
+it("restore_file calls the exact adapter scope and refreshes after Yes", function()
   with_controller(function(harness)
     local unstaged = change("unstaged", "M", "file.txt")
+    local session = Session.new({ id = "restore-file-yes", root = "/repo" })
+    session.owned.diff_win, session.owned.diff_buf = "diff", "diffbuf"
+    session.owned.changes_win, session.owned.changes_buf = "changes", "changesbuf"
+    session.data.status = { staged = {}, unstaged = { unstaged } }
+    local adapter_calls = 0
+    local refreshes = 0
+    harness.controller.configure({
+      changes = {
+        git = {
+          restore_file = function(_, root, actual_change, callback)
+            adapter_calls = adapter_calls + 1
+            assert_equal(root, "/repo")
+            assert_equal(actual_change, unstaged)
+            session.data.status = { staged = {}, unstaged = {} }
+            callback(Result.ok(true))
+          end,
+        },
+        refresh = function(_, active, callback)
+          refreshes = refreshes + 1
+          assert_equal(active, session)
+          callback({ phase = "status", result = Result.ok(active.data.status) })
+        end,
+      },
+      registry = { remove = function() end },
+    })
+    harness.set_target({
+      change_id = unstaged.id,
+      path = unstaged.path,
+      section = unstaged.section,
+    })
+    harness.set_confirmation(true)
+
+    harness.controller.dispatch(session, "restore_file")
+
+    assert_equal(adapter_calls, 1)
+    assert_equal(refreshes, 1)
+    assert_equal(session.view.selected_change_id, nil)
+  end)
+end)
+
+it("restore_file renders the exact untracked delete prompt and stops after No", function()
+  with_controller(function(harness)
+    local unstaged = change("unstaged", "?", "scratch.md")
     local session = Session.new({ id = "unstaged", root = "/repo" })
     session.owned.diff_win, session.owned.diff_buf = "diff", "diffbuf"
     session.owned.changes_win, session.owned.changes_buf = "changes", "changesbuf"
@@ -132,7 +294,7 @@ it("restore_file asks y/N and does not mutate after No", function()
     })
     harness.set_target({ change_id = unstaged.id, path = unstaged.path, section = unstaged.section })
     harness.controller.dispatch(session, "restore_file")
-    assert_truthy(harness.confirmation())
+    assert_equal(harness.confirmation(), "Delete untracked file scratch.md?")
     assert_equal(calls, 0)
   end)
 end)
@@ -188,6 +350,7 @@ it("restore_hunk rejects fresh content at the same rendered hunk coordinates", f
       registry = { remove = function() end },
     })
     harness.set_target({ change_id = unstaged.id, hunk_id = hunk_id, path = unstaged.path, section = unstaged.section })
+    harness.set_confirmation(true)
     harness.controller.dispatch(session, "restore_hunk")
     assert_equal(calls, 0)
     assert_equal(session.error.code, "stale_hunk")

@@ -2,80 +2,44 @@
 
 # Vigit
 
-**Review AI-agent changes across Git worktrees without leaving Neovim.**
+**Просматривайте изменения AI-агентов во всех Git worktree, не покидая Neovim.**
 
-A keyboard-first Git workspace for inspecting, correcting, and handing review
-comments back to coding agents.
+Keyboard-first интерфейс для проверки diff, быстрых исправлений и передачи
+точечных комментариев обратно coding agent.
 
-[Live site](https://vigit-neovim.gentostage.chatgpt.site) · [Quick demo](#quick-demo) · [Installation](#installation) · [Key mappings](#key-mappings)
+[Сайт](https://vigit-neovim.gentostage.chatgpt.site) · [Демо](#быстрое-демо) · [Установка](#установка) · [Клавиши](#основные-клавиши)
 
 </div>
 
 ![Vigit one-file diff](public/site/assets/vigit-one-file.png)
 
-## Why Vigit
+## Возможности
 
-- Keep staged and unstaged changes clearly separated.
-- Switch between a compact file list and a VS Code-style collapsed tree.
-- Review every changed file in one scrollable view or focus on a single file.
-- Stage or unstage a whole file or the hunk under the cursor.
-- Reuse installed TreeSitter parsers for syntax-aware diff highlighting, with
-  compact gutter change bars and a built-in Lua fallback for the isolated demo.
-- Open the real file in a normal, editable Neovim tab and return to a refreshed
-  diff.
-- Preview a different file simply by moving through the changes panel in
-  one-file mode.
-- Switch between task worktrees from a modal view with branch and change
-  counters.
-- Inspect every Vigit shortcut from context-aware `?` help without requiring
-  an external keymap plugin.
-- Remove clean linked worktrees after Vigit verifies that all local commits
-  are present on their upstream branch.
-- Attach local multi-line comments to exact diff ranges and see their markers
-  next to Git changes.
-- Browse, edit, delete, and hand all comments to Codex through one generated
-  `comments.md` file without terminal or tmux automation.
+- staged и unstaged изменения в компактном списке или дереве;
+- all-files и one-file diff с TreeSitter-подсветкой обеих сторон;
+- stage/unstage файла или отдельного hunk;
+- безопасный откат hunk/file с `y/N` и повторной проверкой stale state;
+- отдельная Vigit session для каждого Git worktree;
+- обычные editable source/terminal tabs без вмешательства в mappings, LSP и
+  jumplist пользователя;
+- tracked `.vigit/comments.md` с anchors, ответами агента и checkbox status;
+- worktree picker с dirty/ahead/behind/no-upstream состояниями и безопасным
+  удалением;
+- встроенные help (`?`) и diagnostics (`:VigitLog`) без обязательных плагинов.
 
-## Status
+Vigit пока является ранним MVP. Commit, branch, push/pull, log view и
+side-by-side diff не реализованы.
 
-Vigit is an early MVP for hands-on evaluation. File and hunk staging,
-unstaging, tree navigation, one-file preview, editing, local comments, and
-untracked files are implemented. Commit, branch, push, pull, log, and
-side-by-side diff interfaces are not available yet.
+## Требования
 
-## Quick demo
+- Neovim 0.10+;
+- Git 2.36+;
+- Lua 5.1/LuaJIT, поставляемый вместе с Neovim.
 
-```bash
-git clone git@github.com:Gentostage/vigit.git
-cd vigit
-./scripts/demo.sh
-```
+Сторонние runtime dependencies не обязательны. При наличии TreeSitter Vigit
+использует уже установленные parsers и queries.
 
-The script creates a temporary Git repository plus a linked `demo-secondary`
-worktree. Together they contain independent staged, unstaged, untracked,
-nested, deleted, and long-file changes. The linked worktree also contains a
-local comment attached to its README diff. It launches Vigit in a clean
-Neovim session; press `w` to open the picker, where `ROOT` marks the primary
-checkout and `WT` marks linked worktrees. The complete fixture is removed when
-Neovim exits.
-
-Use your own Neovim configuration:
-
-```bash
-./scripts/demo.sh --user-config
-```
-
-Try the isolated Telescope integration:
-
-```bash
-./scripts/demo.sh --plugins
-```
-
-The plugin demo requires Neovim and Git. The `--plugins` mode requires Neovim
-0.12+, installs Telescope v0.2.1 and plenary.nvim into the isolated
-`vigit-demo` package namespace, and does not modify `~/.config/nvim`.
-
-## Installation
+## Установка
 
 ### lazy.nvim
 
@@ -88,188 +52,155 @@ The plugin demo requires Neovim and Git. The `--plugins` mode requires Neovim
 }
 ```
 
-### Manual
-
-Clone Vigit somewhere on your machine, append it to `runtimepath`, and call
-`setup()`:
+### Вручную
 
 ```lua
 vim.opt.runtimepath:append(vim.fn.expand("~/path/to/vigit"))
 require("vigit").setup()
 ```
 
-## Setup
-
-Open any Git worktree in Neovim and run:
+Откройте любой путь внутри Git worktree и выполните:
 
 ```vim
 :Vigit
 ```
 
-## Workflow
+`:VigitV2` остаётся временным compatibility alias и открывает ту же canonical
+session. Дополнительные команды: `:VigitWorktrees`, `:VigitComments`,
+`:VigitHelp`, `:VigitLog`, `:VigitMigrateReviews` и
+`:VigitInstallCodexSkill`.
+
+## Модель worktree и editor
+
+Vigit создаёт один принадлежащий ему review tab на canonical worktree. Внутри
+находятся только read-only diff/changes buffers. Повторный `:Vigit` фокусирует
+существующую session.
+
+`e`, `gd` и `T` передают управление обычным пользовательским tab:
+
+- `e` открывает или переиспользует source tab данного worktree;
+- `gd` открывает source position и вызывает стандартный LSP definition;
+- `T` открывает terminal с cwd в активном worktree.
+
+Vigit не добавляет в эти buffers собственные `Q`, options, autocmds или
+mappings. Переключайтесь обратно стандартными командами Neovim: `gt`, `gT`,
+`:tabnext`, `:tabprevious` или через свою tabline. Поэтому Telescope, LSP,
+WhichKey, jumplist (`Ctrl-o`/`Ctrl-i`) и пользовательские mappings работают как
+обычно.
+
+## Основные клавиши
+
+| Key | Действие |
+| --- | --- |
+| `<Tab>` | Переключить diff и changes |
+| `<CR>` | Открыть выбранное изменение |
+| `]f` / `[f` | Следующий/предыдущий файл |
+| `]h` / `[h` | Следующий/предыдущий hunk |
+| `a` | Переключить one-file/all-files |
+| `t` | Переключить tree/list |
+| `f` | Показать/скрыть полный context |
+| `e` | Открыть source file |
+| `gd` | Перейти к LSP definition |
+| `T` | Открыть terminal в worktree |
+| `s` | Stage/unstage текущий файл |
+| `S` | Stage/unstage текущий hunk |
+| `x` | Откатить unstaged hunk после `y/N` |
+| `X` | Восстановить файл до HEAD после `y/N` |
+| `c` | Добавить/изменить comment у diff anchor |
+| `C` | Открыть список comments |
+| `P` | Скопировать/показать prompt для открытых comments |
+| `W` | Открыть worktree picker |
+| `r` | Обновить Git state |
+| `?` | Context-aware help |
+| `q` | Закрыть текущий Vigit UI |
+
+Полная generated reference: [docs/keymaps.md](docs/keymaps.md).
+
+## Comments и работа с агентом
+
+Vigit хранит canonical document в каждом worktree:
 
 ```text
-All changes  ── Enter ──>  One-file diff  ── e ──>  Normal edit tab
-     ▲                           │                        │
-     └──────────── a ────────────┴────────── Q ──────────┘
+.vigit/comments.md
 ```
 
-The edit tab uses an ordinary modifiable file buffer. Filetype detection,
-syntax highlighting, LSP, user mappings, and installed plugins keep working.
-After `:w`, press `Q` to return to an updated Vigit view. If any file in the
-edit workspace is still modified, Vigit blocks the return and lists the files
-that must be saved or explicitly discarded.
+Файл намеренно находится внутри проекта и виден в Git diff. Каждый block
+содержит stable ID, source anchor, пользовательский comment, секцию
+`### Ответ агента` и checkbox `[ ]`/`[x]`.
 
-## Key mappings
+1. Нажмите `c` на изменённой строке и сохраните comment через `<C-s>`.
+2. Нажмите `C`, чтобы открыть общий список, перейти к anchor, изменить или
+   удалить comment.
+3. Нажмите `P`: в clipboard попадёт prompt только с открытыми comments и
+   точным worktree root.
+4. Агент исправляет код или отвечает на вопрос, записывает краткий результат
+   под `### Ответ агента` и ставит `[x]` только после завершения.
+5. `r` или сохранение файла обновляет markers и status с диска.
 
-| Key | Action |
-| --- | --- |
-| `t` | Toggle compact `LIST` and collapsed `TREE` |
-| `<CR>` | Focus the selected file; collapse or expand a tree directory |
-| `h` / `l` | Collapse or expand the directory under the cursor |
-| `a` | Return to the all-files diff |
-| `e` | Edit the selected file in a normal Neovim tab |
-| `gd` | Open the real file at the cursor and request its LSP definition |
-| `T` | Open a terminal tab rooted in the active worktree |
-| `w` | Open the worktree picker |
-| `[w` / `]w` | Move between open Vigit worktree tabs |
-| `c` | Add a comment, or edit the comment marked on the current diff line |
-| visual `c` | Attach a comment to the selected range in one diff file |
-| `P` | Copy/open a Codex prompt for the current comments |
-| `C` | Open the comment list |
-| `s` | Stage an unstaged file/hunk or unstage a staged file/hunk |
-| `x` | Discard the unstaged hunk under the cursor, or the whole unstaged file |
-| `X` | Restore the whole file to `HEAD`; delete it when it is untracked |
-| `r` | Refresh Git status and diff |
-| `f` | Toggle compact and expanded diff context |
-| `?` | Open context-aware Vigit keymap help |
-| `:VigitHelp` | Open the complete keymap reference from any buffer |
-| `q` | Close the Vigit interface |
-| `Q` | Return from the edit tab to Vigit |
-| `:qa!` | Exit Neovim completely |
-
-Vigit stores its mappings and descriptions in one internal registry. Every
-buffer-local mapping has a `desc`, so WhichKey can discover it when installed,
-while Vigit's own `?` help works without WhichKey. Normal editor and terminal
-buffers keep their standard `?` behavior; use `:VigitHelp` there.
-
-Every discard action asks for confirmation. A staged hunk must first be
-unstaged with `s`; this prevents an accidental `x` from deleting indexed
-work. Untracked files are deleted only after the same confirmation. In a
-Vigit terminal, run `exit`, press normal-mode `Q`, or press `Ctrl-Q` to close
-the terminal tab and return to the Vigit tab that opened it.
-
-## Comment workflow
-
-Press `c` on a changed line to write one ordinary multi-line comment. Use
-visual `c` to comment on a range inside one file. Save with `:w` or `Ctrl-S`.
-Vigit immediately stores it outside the working tree and shows its ID plus a
-short preview, such as `● VIGIT-001 · Clarify this condition…`, next to the
-anchored diff line. Press `c` on that line again to edit the comment directly.
-When several comments share an anchor, select the one to edit from the popup.
-
-Press `C` for the complete list:
-
-| Key | Action |
-| --- | --- |
-| `<CR>` | Close the list and jump to the comment source in one-file diff |
-| `e` | Edit the selected comment |
-| `d` | Delete it after confirmation |
-| `r` | Refresh comments and Git state |
-| `?` | Show comment-list mappings |
-| `q` | Close the list |
-
-Structured JSON remains the internal source for editing. After every
-create/edit/delete, Vigit also rebuilds one agent-friendly file:
-
-```text
-<git-common-dir>/vigit/worktrees/<worktree-id>/
-  comments.md
-```
-
-Press `P` to copy a short Codex prompt containing the absolute `comments.md`
-path and exact worktree root. When a clipboard provider is unavailable, Vigit
-opens the prompt in a read-only window where `y` copies it.
-
-Optionally install the bundled Codex skill:
+Bundled Codex skill устанавливается командами:
 
 ```vim
 :VigitInstallCodexSkill
+:VigitInstallCodexSkill!
 ```
 
-Use `:VigitInstallCodexSkill!` to replace an older version after confirmation.
-The skill reads `comments.md`, applies focused changes in the exact worktree,
-and reports resolved or blocked IDs. It does not edit the comment file, stage,
-commit, push, or inspect another worktree. Review the resulting diff and delete
-completed comments manually.
+Skill сохраняет неизвестный Markdown и чужие comments, не выполняет stage,
+commit, push и не удаляет worktree без отдельного запроса. Legacy review data
+импортируется только явной командой `:VigitMigrateReviews`.
 
-Use `:VigitWorktrees` or `w` to open the worktree modal. Selecting a worktree
-focuses its existing Vigit tab or opens a new tab with a tab-local working
-directory. Inside the modal, `d` removes a linked `WT` after a `y/N` prompt;
-the Git branch is always kept. `PUSHED`, `↑N`, `↓N`, and `NO UPSTREAM` show
-the relationship with the configured upstream. Vigit allows removal only when
-the worktree is not `ROOT`, its Git status is clean, and `ahead == 0`. If that
-worktree has an open Vigit tab, Vigit closes it automatically. Unsaved editor
-buffers, uncommitted files, detached HEAD, a missing upstream, or unpushed
-commits block removal with an exact reason. The check uses local remote-tracking
-refs and never performs a hidden network fetch. Vigit repeats the safety check
-after the `y` confirmation, immediately before closing and removing the
-worktree.
+## Безопасность worktree
 
-## Plugin-friendly edit mode
+`W` открывает picker. Он показывает `ROOT` и linked `WT`, branch, количество
+изменений и upstream state. Сетевой fetch никогда не выполняется скрыто;
+используйте `F` явно.
 
-Inside the edit workspace, use normal Neovim navigation:
+`d` удаляет только linked worktree, если:
 
-```vim
-:edit path/to/file
-:find filename
-gf
-:vimgrep /text/gj **/* | copen
+- Git status чистый;
+- branch имеет upstream;
+- `ahead == 0`;
+- в worktree нет загруженных source buffers;
+- повторный preflight после `y` дал тот же безопасный результат.
+
+Vigit закрывает только принадлежащую ему session, сохраняет Git branch и не
+закрывает пользовательские source/terminal tabs.
+
+## Быстрое демо
+
+```bash
+git clone git@github.com:Gentostage/vigit.git
+cd vigit
+./scripts/demo.sh
 ```
 
-With `./scripts/demo.sh --plugins`, Telescope mappings are available:
+Fixture создаёт root и четыре linked worktree со staged/unstaged long files,
+mixed hunks, staged deletion, untracked files, tracked open/completed comments,
+а также safe, dirty, ahead и no-upstream состояниями. Всё удаляется после
+закрытия Neovim.
 
-| Key | Action |
-| --- | --- |
-| `<leader>ff` | Find files |
-| `<leader>fg` | Live grep |
-| `<leader>fb` | Open buffers |
-
-Every regular file buffer opened in the edit tab is attached to the Vigit
-workspace, so `Q` remains available after navigating to another file.
-
-Vigit automatically uses TreeSitter parsers already installed in Neovim. For
-example, install Python highlighting with:
-
-```vim
-:TSInstall python
+```bash
+./scripts/demo.sh --user-config  # обычный пользовательский config/plugins
+./scripts/demo.sh --plugins      # изолированные Telescope + plenary
+./scripts/demo.sh --check        # только автоматическая проверка fixture
 ```
 
-Both sides of a diff are highlighted from their real Git snapshots: `HEAD`,
-the index, and the worktree. With lazy.nvim, an installed `nvim-treesitter`
-plugin is loaded before the first diff render; other plugin managers continue
-to use their normal runtime setup.
+`--plugins` требует Neovim 0.12+, использует отдельный `NVIM_APPNAME` и не
+изменяет пользовательский config.
 
-Collapsed context lines also show their enclosing class and function when the
-active parser can identify them.
+## Разработка
 
-`gd` uses Neovim's standard LSP client after opening the real source buffer.
-Vigit does not install a language server; the server configured for that
-filetype attaches exactly as it does during normal editing.
+Единая проверка:
 
-## Project site
+```bash
+./scripts/test.sh
+```
 
-The [live project card](https://vigit-neovim.gentostage.chatgpt.site) is built
-from [`public/site/`](public/site/index.html). It remains plain HTML and CSS;
-the repository root only adds the Vinext hosting wrapper required by Sites.
-The page shares the repository screenshots and is ready for a real WebM or MP4
-demo recording.
+Скрипт последовательно запускает unit, real-Git integration, headless Neovim и
+generated keymap drift check. Он останавливается на первой ошибке, ничего не
+устанавливает и не изменяет пользовательский Neovim config.
 
-## Roadmap
+## Сайт проекта
 
-- Commit and branch workflows.
-- Push, pull, and log views.
-- Side-by-side diff mode.
-- Configurable mappings and layout.
-- Automatic stale-comment re-anchoring.
-- Recorded demo and richer project gallery.
+[Project card](https://vigit-neovim.gentostage.chatgpt.site) собирается из
+[`public/site/`](public/site/index.html). Страница остаётся plain HTML/CSS и
+готова для добавления WebM/MP4 demo.

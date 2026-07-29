@@ -58,8 +58,8 @@ vim.api.nvim_create_autocmd("VimEnter", {
   once = true,
   callback = function()
     local session = require("vigit").open({ cwd = demo_dir })
-    if session then
-      vim.api.nvim_set_current_win(session.changes_win)
+    if session and vim.api.nvim_win_is_valid(session.owned.changes_win) then
+      vim.api.nvim_set_current_win(session.owned.changes_win)
     end
   end,
 })

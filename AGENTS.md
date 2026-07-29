@@ -1,61 +1,59 @@
 # Repository Guidelines
 
-## Product Purpose
+## Назначение проекта
 
-Vigit supports AI-assisted projects. It gives developers a fast,
-keyboard-first way to review agent changes, move between affected files, make
-corrections, and prepare precise feedback without losing project context. Keep
-new features focused on this inspect-correct-comment loop.
+Vigit — Lua-плагин Neovim для keyboard-first проверки изменений AI-агентов в
+нескольких Git worktree. Новые функции должны поддерживать основной цикл:
+inspect → correct → comment → handoff агенту.
 
-## Project Structure & Module Organization
+## Структура
 
-Vigit is a Lua Neovim plugin. Core behavior lives in `lua/vigit/`: `git.lua`
-wraps Git commands, `parser.lua` parses status and diffs, `state.lua` owns view
-state, and `ui.lua`, `changes_view.lua`, `highlights.lua`, and `actions.lua`
-implement interaction and rendering. Keep public entry points in
-`lua/vigit/init.lua`.
+Public API находится в `lua/vigit/init.lua`; `lua/vigit/v2.lua` — временный
+compatibility alias без отдельного state. Код разделён по слоям:
 
-Tests live in `tests/*_spec.lua` and are loaded by `tests/run.lua`. Demo fixtures
-and isolated Neovim configurations belong in `scripts/`. The project card is
-plain HTML/CSS under `public/site/`; `app/`, `vite.config.js`, and
-`scripts/prepare-sites-artifact.mjs` provide the Vinext hosting wrapper.
+- `lua/vigit/core/` — чистые модели status, diff, patch, review и worktree;
+- `lua/vigit/application/` — orchestration changes, mutations, comments и
+  worktrees;
+- `lua/vigit/adapters/` — Git CLI, Neovim, filesystem, process и TreeSitter;
+- `lua/vigit/ui/` — session registry, controller, renderer, layout и views.
 
-## Build, Test, and Development Commands
+Unit tests лежат в `tests/unit/`, real-Git integration — в
+`tests/integration/`, headless Neovim workflows — в `tests/headless/`.
+Disposable demo и isolated init-файлы находятся в `scripts/`; bundled Codex
+skill — в `skills/vigit-review/`; сайт — в `public/site/`.
 
-- `./scripts/demo.sh` opens a disposable Git fixture in clean Neovim.
-- `./scripts/demo.sh --user-config` tests against your normal Neovim setup.
-- `./scripts/demo.sh --plugins` enables the isolated Telescope integration.
-- `lua tests/run.lua` runs the lightweight Lua specification suite.
-- `npm install` installs website build dependencies.
-- `npm run build` produces the deployable website in `dist/`.
-- `npm audit` checks JavaScript dependencies for known vulnerabilities.
+## Команды
 
-## Coding Style & Naming Conventions
+- `./scripts/test.sh` — полный unit/integration/headless/keymap gate.
+- `./scripts/demo.sh` — disposable fixture в clean Neovim.
+- `./scripts/demo.sh --user-config` — проверка с пользовательским config.
+- `./scripts/demo.sh --plugins` — isolated Telescope integration.
+- `lua scripts/generate-keymaps.lua --check` — проверка `docs/keymaps.md`.
+- `npm run build` — production build project site в `dist/`.
 
-Use two-space indentation in Lua, JavaScript, HTML, and CSS. Lua modules should
-return an `M` table, keep helpers `local`, and use `snake_case` for filenames,
-functions, and variables. Prefer small modules with explicit responsibilities;
-keep Git shell construction inside `git.lua` and UI mutations inside UI/action
-modules. Match existing CSS custom properties and semantic class names rather
-than introducing one-off inline styles.
+`scripts/test.sh` не должен устанавливать зависимости или менять
+пользовательский Neovim config.
 
-## Testing Guidelines
+## Стиль и архитектурные ограничения
 
-Add focused `it("describes behavior", function() ... end)` cases to the matching
-`*_spec.lua` file. Mock `vim` APIs only at module boundaries and restore global
-or `package.loaded` state after each case. There is no formal coverage target,
-but parser, state, Git index operations, and keyboard workflows should receive
-regression coverage. Run the Lua suite and manually exercise the relevant demo
-mode before opening a PR.
+Используйте два пробела в Lua, JavaScript, HTML и CSS; имена Lua files,
+functions и variables — `snake_case`. Modules возвращают `M`, helpers держите
+`local`. Git subprocesses принадлежат adapters, orchestration — application,
+UI mutations — controller/renderer.
 
-## Commit & Pull Request Guidelines
+Source и terminal buffers принадлежат пользователю. Vigit не добавляет в них
+свои mappings, options, winbar или lifecycle autocmds и не закрывает их.
+Каждый canonical worktree имеет независимую Vigit session.
 
-Follow the established Conventional Commit style:
-`fix(site): bundle worker runtime`, `docs: link project site`, or
-`feat(ui): add side-by-side diff`. Keep subjects imperative and scoped.
+## Тестирование и PR
 
-PRs should explain the user-visible change, list validation commands, and link
-related issues. Include terminal screenshots or a short recording for layout,
-highlighting, tree, or key-mapping changes. Do not commit generated directories
-such as `dist/`, `.wrangler/`, `.next/`, or `node_modules/`, nor local
-`.codex/`, `.superpowers/`, or `docs/superpowers/` content.
+Добавляйте focused `it("поведение", function() ... end)` в соответствующий
+suite. Для Git mutations проверяйте точный scope и неизменность index/worktree
+при ошибке; для UI — ownership, anchors и async stale-result handling. Перед PR
+запустите `./scripts/test.sh` и релевантный demo mode.
+
+Commit messages используют Conventional Commits, например
+`feat(ui): add side-by-side diff`. PR должен описывать пользовательский эффект,
+команды проверки и содержать screenshot/recording для визуальных изменений.
+Не коммитьте `dist/`, `.wrangler/`, `.next/`, `node_modules/`, `.codex/`,
+`.superpowers/` и `docs/superpowers/`.

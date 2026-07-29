@@ -42,8 +42,8 @@ end
 assert(#tests > 0, "headless test runner loaded zero tests")
 if using_default_files then
   assert(
-    #tests == 91,
-    string.format("expected 91 default headless tests, loaded %d", #tests)
+    #tests == 95,
+    string.format("expected 95 default headless tests, loaded %d", #tests)
   )
 end
 

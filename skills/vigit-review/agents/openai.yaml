@@ -1,4 +1,4 @@
 interface:
   display_name: "Vigit Review"
-  short_description: "Resolve local Vigit comments"
-  default_prompt: "Use $vigit-review to resolve the Vigit comments.md handoff for this worktree."
+  short_description: "Resolve canonical Vigit review comments"
+  default_prompt: "Use $vigit-review to resolve open comments in this worktree and update their status and response in .vigit/comments.md."

@@ -45,6 +45,22 @@ local function assert_hunk(diff_model, kind, text)
   assert_truthy(hunk_with(diff_model, kind, text))
 end
 
+local function file_bytes(root, path)
+  local handle = assert(io.open(root .. "/" .. path, "rb"))
+  local bytes = handle:read("*a")
+  handle:close()
+  return bytes
+end
+
+local function index_bytes(root, path)
+  local result = vim.system(
+    { "git", "show", ":" .. path },
+    { cwd = root, text = false }
+  ):wait()
+  assert_equal(result.code, 0)
+  return result.stdout
+end
+
 it("moves only the selected modified hunk between worktree and index", function(done)
   local repo = git_repo.new()
   repo:write("modified.txt", {
@@ -378,6 +394,37 @@ it("stages one worktree hunk of an added file already represented in the index",
             done()
           end)
         end)
+      end)
+    end)
+  end)
+end)
+
+it("returns patch_conflict without changing index or worktree when stage_hunk is stale", function(done)
+  local repo = git_repo.new()
+  repo:write("stale-stage.txt", { "one", "two", "three" })
+  repo:git({ "add", "--", "stale-stage.txt" })
+  repo:commit("base")
+  repo:write("stale-stage.txt", { "one", "two selected", "three" })
+  local git = git_cli.new(process)
+
+  status(git, repo.root, function(current)
+    local change = find_change(current.unstaged, "stale-stage.txt")
+    diff(git, repo.root, change, function(file_diff)
+      local selected = hunk_with(file_diff, "add", "two selected")
+      assert_truthy(selected)
+      repo:write("stale-stage.txt", { "one", "index race", "three" })
+      repo:git({ "add", "--", "stale-stage.txt" })
+      repo:write("stale-stage.txt", { "one", "worktree race", "three" })
+      local before_index = index_bytes(repo.root, "stale-stage.txt")
+      local before_worktree = file_bytes(repo.root, "stale-stage.txt")
+
+      git:stage_hunk(repo.root, file_diff, selected, function(result)
+        assert_equal(result.ok, false)
+        assert_equal(result.error.code, "patch_conflict")
+        assert_equal(index_bytes(repo.root, "stale-stage.txt"), before_index)
+        assert_equal(file_bytes(repo.root, "stale-stage.txt"), before_worktree)
+        repo:cleanup()
+        done()
       end)
     end)
   end)

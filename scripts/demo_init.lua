@@ -16,15 +16,9 @@ require("vigit").setup()
 vim.api.nvim_create_autocmd("VimEnter", {
   once = true,
   callback = function()
-    local use_v2 = vim.env.VIGIT_DEMO_V2 == "1"
-    local session = use_v2
-        and require("vigit.v2").open()
-      or require("vigit").open()
-    if session then
-      local changes_win = use_v2
-          and session.owned.changes_win
-        or session.changes_win
-      vim.api.nvim_set_current_win(changes_win)
+    local session = require("vigit").open()
+    if session and vim.api.nvim_win_is_valid(session.owned.changes_win) then
+      vim.api.nvim_set_current_win(session.owned.changes_win)
     end
   end,
 })

@@ -581,59 +581,64 @@ local function restore_hunk(session)
   end
   local rendered_patch = rendered_hunk.patch
 
-  session.mutations = session.mutations or {}
-  session.mutations.restore_hunk_serial = (session.mutations.restore_hunk_serial or 0) + 1
-  local source_anchor = file_anchor(session, change)
-  local target_position = file_target_position(session, change.id)
-  local mutation_path = change.path
-  context.mutations:enqueue(session, {
-    id = "restore_hunk:" .. session.mutations.restore_hunk_serial,
-    run = function(done)
-      local latest_change = change_for(session, target.change_id)
-      if session.closed or not latest_change or latest_change.section ~= "unstaged" then
-        done(Result.err("stale_hunk", "Selected hunk is missing or stale"))
-        return
-      end
-      local ui = config.get().ui
-      context.changes.git:diff(
-        session.root,
-        latest_change,
-        ui.context_lines,
-        ui.max_diff_bytes,
-        function(diff_result)
-          if session.closed then
-            done(Result.err("stale_hunk", "Selected hunk is missing or stale"))
-            return
-          end
-          if not diff_result.ok then
-            done(diff_result)
-            return
-          end
-          local hunk = hunk_for(latest_change, diff_result.value, target.hunk_id)
-          if not hunk or hunk.patch ~= rendered_patch then
-            done(Result.err("stale_hunk", "Selected hunk is missing or stale"))
-            return
-          end
-          mutation_path = latest_change.path
-          context.changes.git:restore_hunk(
-            session.root,
-            diff_result.value,
-            hunk,
-            done
-          )
+  confirm.ask("Discard selected hunk in " .. change.path .. "?", function(accepted)
+    if not accepted or session.closed or session.busy.mutation then
+      return
+    end
+    session.mutations = session.mutations or {}
+    session.mutations.restore_hunk_serial = (session.mutations.restore_hunk_serial or 0) + 1
+    local source_anchor = file_anchor(session, change)
+    local target_position = file_target_position(session, change.id)
+    local mutation_path = change.path
+    context.mutations:enqueue(session, {
+      id = "restore_hunk:" .. session.mutations.restore_hunk_serial,
+      run = function(done)
+        local latest_change = change_for(session, target.change_id)
+        if session.closed or not latest_change or latest_change.section ~= "unstaged" then
+          done(Result.err("stale_hunk", "Selected hunk is missing or stale"))
+          return
         end
-      )
-    end,
-    after_success = function()
-      refresh_file_mutation(
-        session,
-        mutation_path,
-        "unstaged",
-        source_anchor,
-        target_position
-      )
-    end,
-  })
+        local ui = config.get().ui
+        context.changes.git:diff(
+          session.root,
+          latest_change,
+          ui.context_lines,
+          ui.max_diff_bytes,
+          function(diff_result)
+            if session.closed then
+              done(Result.err("stale_hunk", "Selected hunk is missing or stale"))
+              return
+            end
+            if not diff_result.ok then
+              done(diff_result)
+              return
+            end
+            local hunk = hunk_for(latest_change, diff_result.value, target.hunk_id)
+            if not hunk or hunk.patch ~= rendered_patch then
+              done(Result.err("stale_hunk", "Selected hunk is missing or stale"))
+              return
+            end
+            mutation_path = latest_change.path
+            context.changes.git:restore_hunk(
+              session.root,
+              diff_result.value,
+              hunk,
+              done
+            )
+          end
+        )
+      end,
+      after_success = function()
+        refresh_file_mutation(
+          session,
+          mutation_path,
+          "unstaged",
+          source_anchor,
+          target_position
+        )
+      end,
+    })
+  end)
 end
 
 local function restore_file(session)
