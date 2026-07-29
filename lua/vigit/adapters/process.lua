@@ -9,12 +9,15 @@ function M.run(args, opts, callback)
       return
     end
     called = true
+    if not result.ok then require("vigit.ui.log").push(result) end
     callback(result)
   end
 
   if type(args) ~= "table" or type(args[1]) ~= "string" then
     vim.schedule(function()
-      complete(Result.err("invalid_command", "Command must be an argument array"))
+      complete(Result.err("invalid_command", "Command must be an argument array", {
+        args = args, cwd = opts and opts.cwd,
+      }))
     end)
     return { cancel = function() end }
   end
@@ -32,7 +35,12 @@ function M.run(args, opts, callback)
       complete(Result.err(
         "process_failed",
         "Process exited with code " .. output.code,
-        output.stderr,
+        {
+          args = args,
+          cwd = opts.cwd,
+          exit_code = output.code,
+          stderr = output.stderr,
+        },
         true
       ))
     end
@@ -40,7 +48,9 @@ function M.run(args, opts, callback)
 
   if not ok then
     vim.schedule(function()
-      complete(Result.err("process_unavailable", "Unable to start process", system_or_error))
+      complete(Result.err("process_unavailable", "Unable to start process", {
+        args = args, cwd = opts.cwd, error = system_or_error,
+      }))
     end)
     return { cancel = function() end }
   end

@@ -69,7 +69,7 @@ jumplist и lifecycle; syntax работает до открытия файла.
   [Plan 04, Task 2](./plans/04-worktrees-and-cutover.md#task-2-async-worktree-listing-и-session-picker).
 - [x] T019 Реализовать `y/N`, double preflight и safe worktree remove
   по [Plan 04, Task 3](./plans/04-worktrees-and-cutover.md#task-3-safe-worktree-removal).
-- [ ] T020 Централизовать keymaps/help/docs, refresh observers и `:VigitLog` по
+- [x] T020 Централизовать keymaps/help/docs, refresh observers и `:VigitLog` по
   [Plan 04, Task 4](./plans/04-worktrees-and-cutover.md#task-4-central-help-refresh-observers-и-diagnostics).
 - [ ] T021 Переключить public API/commands на v2 и сохранить `:VigitV2` alias
   по [Plan 04, Task 5](./plans/04-worktrees-and-cutover.md#task-5-public-cutover-legacy-removal-и-project-documentation).

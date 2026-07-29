@@ -197,6 +197,21 @@ it("рендерит completed probes во время loading и не переп
   end
 end)
 
+it("derives the worktree footer from enabled mappings without overflow", function()
+  local config = require("vigit.config")
+  local view = require("vigit.ui.views.worktrees")
+  local keymaps = require("vigit.ui.keymaps")
+  local ok, message = xpcall(function()
+    assert_truthy(config.setup({ keymaps = { ["worktrees.fetch"] = false } }).ok)
+    local rendered = view.render({}, 20)
+    local footer = rendered.lines[#rendered.lines]
+    assert_equal(footer:find("fetch", 1, true), nil)
+    assert_truthy(keymaps.display_width(footer) <= 20)
+  end, debug.traceback)
+  config.setup()
+  if not ok then error(message, 0) end
+end)
+
 it("показывает раздельные status/upstream probe errors без ложного clean", function()
   local Result = require("vigit.core.result")
   local Worktrees = require("vigit.application.worktrees")
@@ -247,6 +262,56 @@ it("показывает раздельные status/upstream probe errors бе�
   assert_truthy(both_failed:find("status !status_failed", 1, true) ~= nil)
   assert_truthy(both_failed:find("upstream !upstream_failed", 1, true) ~= nil)
   assert_truthy(both_failed:find("clean", 1, true) == nil)
+end)
+
+it("writes picker and root-resolution failures to diagnostics before rendering", function()
+  local Result = require("vigit.core.result")
+  local log = require("vigit.ui.log")
+  local view = require("vigit.ui.views.worktrees")
+  local app = {}
+  function app:set_on_update(callback, owner)
+    self.on_update, self.owner = callback, owner
+  end
+  function app:detach(owner)
+    if self.owner == owner then self.on_update, self.owner = nil, nil end
+  end
+  function app:cancel() end
+  function app:list(_, callback)
+    self.on_update({ {
+      kind = "root", path = "/repo", name = "repo", branch = "main",
+      probes = { status = { state = "error", error = { code = "probe_failed", message = "probe failed" } } },
+    } })
+    callback(Result.err("list_failed", "list failed"))
+    return { cancel = function() end }
+  end
+  function app:open(_, callback)
+    callback(Result.err("open_failed", "open failed"))
+    return { cancel = function() end }
+  end
+  function app:fetch(_, callback)
+    callback(Result.err("fetch_failed", "fetch failed"))
+    return { cancel = function() end }
+  end
+  function app:remove(_, callback)
+    callback(Result.err("remove_failed", "remove failed"))
+    return { cancel = function() end }
+  end
+
+  local picker = assert(view.open({ app = app, origin = { root = "/repo", closed = false } }))
+  assert_truthy(vim.wait(500, function() return #picker.targets == 1 end, 10))
+  picker:select()
+  picker:fetch()
+  picker:remove()
+  local codes = {}
+  for _, entry in ipairs(log.entries()) do codes[entry.code] = true end
+  for _, code in ipairs({ "list_failed", "probe_failed", "open_failed", "fetch_failed", "remove_failed" }) do
+    assert_truthy(codes[code])
+  end
+  picker:close()
+
+  local _, root_error = require("vigit.v2").worktrees({ cwd = vim.fn.tempname() })
+  assert_equal(root_error.code, "not_repository")
+  assert_truthy(log.entries()[#log.entries()].code == "not_repository")
 end)
 
 it("stale dispose старого picker не отменяет новый picker и его рендер", function()

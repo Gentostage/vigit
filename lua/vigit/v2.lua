@@ -12,6 +12,7 @@ local registry_module = require("vigit.ui.registry")
 local renderer = require("vigit.ui.renderer")
 local Session = require("vigit.ui.session")
 local worktrees_view = require("vigit.ui.views.worktrees")
+local log = require("vigit.ui.log")
 
 local M = {}
 
@@ -23,6 +24,77 @@ local git = Git.new(process)
 local changes
 local worktrees
 local reconciled_generation = setmetatable({}, { __mode = "k" })
+local pending_refreshes = setmetatable({}, { __mode = "k" })
+
+local function log_session_error(session)
+  if not session or not session.error then
+    if session then session.logged_error = nil end
+    return
+  end
+  if session.logged_error == session.error then return end
+  session.logged_error = session.error
+  local error = {}
+  for key, value in pairs(session.error) do error[key] = value end
+  error.session_id = session.id
+  log.push(error)
+end
+
+local function normalized_path(path)
+  if type(path) ~= "string" or path == "" then return nil end
+  path = vim.fs.normalize(path):gsub("\\", "/")
+  if package.config:sub(1, 1) == "\\" then return path:lower() end
+  return path
+end
+
+local function belongs_to(root, path)
+  root, path = normalized_path(root), normalized_path(path)
+  if not root or not path then return false end
+  return path == root or path:sub(1, #root + 1) == root .. "/"
+end
+
+local function request_refresh(session)
+  if not session or session.closed then return end
+  local previous = pending_refreshes[session]
+  if previous and previous.timer and not previous.timer:is_closing() then
+    previous.timer:stop()
+    previous.timer:close()
+  end
+  local request = { generation = session.reads.generation }
+  pending_refreshes[session] = request
+  request.timer = vim.defer_fn(function()
+    if pending_refreshes[session] ~= request then return end
+    pending_refreshes[session] = nil
+    if session.closed or session.reads.generation ~= request.generation then return end
+    controller.dispatch(session, "refresh")
+  end, config.get().refresh.debounce_ms)
+end
+
+function M.setup_observers()
+  local group = vim.api.nvim_create_augroup("VigitRefreshObservers", { clear = true })
+  vim.api.nvim_create_autocmd("BufWritePost", {
+    group = group,
+    callback = function(args)
+      if not config.get().refresh.on_write then return end
+      local path = vim.api.nvim_buf_get_name(args.buf)
+      if path == "" or path:match("^%a+://") then return end
+      for _, session in ipairs(registry:all()) do
+        if not session.closed and belongs_to(session.root, path) then request_refresh(session) end
+      end
+    end,
+    desc = "Refresh Vigit sessions after source writes",
+  })
+  vim.api.nvim_create_autocmd("TabEnter", {
+    group = group,
+    callback = function()
+      if not config.get().refresh.on_tab_enter then return end
+      local tab = vim.api.nvim_get_current_tabpage()
+      for _, session in ipairs(registry:all()) do
+        if not session.closed and session.owned.tab == tab then request_refresh(session) end
+      end
+    end,
+    desc = "Refresh the entered Vigit tab",
+  })
+end
 
 local function all_missing_ids(session)
   local ids = {}
@@ -66,6 +138,7 @@ changes = Changes.new({
     if status and not session.busy.status then
       session.branch = status.branch and status.branch.head or nil
     end
+    log_session_error(session)
     renderer.render(session)
     reconcile_all_files(session)
   end,
@@ -133,6 +206,7 @@ function M.open(opts)
   opts = opts or {}
   local root_result = neovim.find_repo_root(opts.cwd or current_path())
   if not root_result.ok then
+    log.push(root_result.error)
     return nil, root_result.error
   end
 
@@ -160,6 +234,12 @@ function M.open(opts)
     pcall(layout.close, session)
     session.closed = true
     registry:remove(session.id)
+    log.push({
+      session_id = session.id,
+      code = "ui_open_failed",
+      message = "Unable to open Vigit review UI",
+      details = open_error,
+    })
     return nil, {
       code = "ui_open_failed",
       message = "Unable to open Vigit review UI",
@@ -173,6 +253,7 @@ function M.open(opts)
   if not comments.ok then
     session.errors.comments = comments.error
     session.error = comments.error
+    log_session_error(session)
   end
   renderer.render(session)
   changes:refresh(session)
@@ -195,6 +276,7 @@ function M.worktrees(opts)
   else
     local root_result = neovim.find_repo_root(opts.cwd or current_path())
     if not root_result.ok then
+      log.push(root_result.error)
       return nil, root_result.error
     end
     root = root_result.value

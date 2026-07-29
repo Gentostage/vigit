@@ -1,4 +1,5 @@
 local confirm = require("vigit.ui.confirm")
+local keymaps = require("vigit.ui.keymaps")
 
 local M = {}
 
@@ -72,7 +73,11 @@ function M.open(session, reviews, opts)
     end
     if #session.data.comments == 0 then lines[#lines + 1] = " No comments." end
     lines[#lines + 1] = ""
-    lines[#lines + 1] = " Enter jump · e edit · d delete · q close"
+    lines[#lines + 1] = keymaps.hints(
+      "comments",
+      vim.api.nvim_win_get_width(window),
+      require("vigit.config").get()
+    )
     vim.bo[buffer].modifiable = true
     vim.api.nvim_buf_set_lines(buffer, 0, -1, false, lines)
     vim.bo[buffer].modifiable = false

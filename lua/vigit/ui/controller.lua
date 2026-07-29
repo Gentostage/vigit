@@ -24,10 +24,34 @@ local source_target_kinds = {
 local comment_target_kinds = { add = true, context = true, delete = true }
 local open_comments
 
+local supported_intents = {
+  toggle_focus = true, activate = true, select_change = true, next_file = true,
+  previous_file = true, next_hunk = true, previous_hunk = true,
+  toggle_all_files = true, toggle_changes_mode = true, toggle_file_index = true,
+  toggle_hunk_index = true, restore_hunk = true, restore_file = true,
+  add_comment = true, open_comments = true, prepare_prompt = true,
+  open_file = true, goto_definition = true, open_terminal = true,
+  open_worktrees = true, toggle_context = true, refresh = true, resize = true,
+  abandon = true, close = true, show_help = true,
+}
+
+function M.supports_intent(intent)
+  return supported_intents[intent] == true
+end
+
+local function record_error(session, error)
+  if type(error) ~= "table" then return end
+  local diagnostic = {}
+  for key, value in pairs(error) do diagnostic[key] = value end
+  diagnostic.session_id = session and session.id or diagnostic.session_id
+  require("vigit.ui.log").push(diagnostic)
+end
+
 function M.configure(opts)
   local previous = context
   local mutations = opts.mutations or Mutations.new({
     on_change = function(session)
+      record_error(session, session.error)
       renderer.render(session)
     end,
   })
@@ -46,6 +70,7 @@ function M.configure(opts)
 end
 
 local function review_error(session, error)
+  record_error(session, error)
   session.errors = session.errors or {}
   session.errors.comments = error
   ErrorState.resolve(session)
@@ -302,6 +327,7 @@ local function file_anchor(session, change)
 end
 
 local function mutation_error(session, error)
+  record_error(session, error)
   session.errors = session.errors or {}
   session.errors.mutation = error
   ErrorState.resolve(session)
@@ -769,6 +795,7 @@ local function complete_handler(session, action, request, result)
   if result.ok then
     session.errors.handler = nil
   else
+    record_error(session, result.error)
     session.errors.handler = result.error
   end
   ErrorState.resolve(session)
@@ -878,6 +905,31 @@ local function move_file(session, delta)
   select_change(session, targets[index])
 end
 
+local function move_hunk(session, delta)
+  local window = session.owned.diff_win
+  if not window or not vim.api.nvim_win_is_valid(window) then return end
+  local rendered = diff_view.render(session, vim.api.nvim_win_get_width(window))
+  local rows, seen = {}, {}
+  for row, target in ipairs(rendered.rows or {}) do
+    if target.hunk_id and not seen[target.hunk_id] then
+      seen[target.hunk_id] = true
+      rows[#rows + 1] = row
+    end
+  end
+  if #rows == 0 then return end
+  local current = vim.api.nvim_win_get_cursor(window)[1]
+  local index = delta > 0 and 1 or #rows
+  for candidate, row in ipairs(rows) do
+    if row == current then index = candidate; break end
+    if delta > 0 and row > current then index = candidate; break end
+    if delta < 0 and row >= current then index = math.max(1, candidate - 1); break end
+  end
+  if (delta > 0 and rows[index] <= current) or (delta < 0 and rows[index] >= current) then
+    index = ((index - 1 + delta) % #rows) + 1
+  end
+  vim.api.nvim_win_set_cursor(window, { rows[index], 0 })
+end
+
 local function all_change_ids(session)
   local ids = {}
   local status = session.data.status or {}
@@ -907,6 +959,10 @@ function M.dispatch(session, intent)
     move_file(session, 1)
   elseif name == "previous_file" then
     move_file(session, -1)
+  elseif name == "next_hunk" then
+    move_hunk(session, 1)
+  elseif name == "previous_hunk" then
+    move_hunk(session, -1)
   elseif name == "toggle_all_files" then
     refresh_requests[session] = nil
     session.view.diff_mode = session.view.diff_mode == "one_file"
@@ -958,6 +1014,10 @@ function M.dispatch(session, intent)
     if context.worktrees and type(context.worktrees.open) == "function" then
       context.worktrees.open(session)
     end
+  elseif name == "show_help" then
+    local current = vim.api.nvim_get_current_win()
+    local name_for_window = current == session.owned.changes_win and "changes" or "diff"
+    require("vigit.ui.views.help").open(name_for_window)
   elseif name == "toggle_context" or name == "f" then
     refresh_requests[session] = nil
     local captured = capture_diff_anchor(session)

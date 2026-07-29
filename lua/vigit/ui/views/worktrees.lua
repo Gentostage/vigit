@@ -1,8 +1,25 @@
 local keymaps = require("vigit.ui.keymaps")
+local log = require("vigit.ui.log")
 
 local M = {}
 local active_picker
 local namespace_id = 0
+
+local function record_error(picker, error)
+  if type(error) ~= "table" then return end
+  if picker and picker.logged_errors[error] then return end
+  if picker then picker.logged_errors[error] = true end
+  log.push(error)
+end
+
+local function record_row_errors(picker, rows)
+  for _, row in ipairs(rows or {}) do
+    record_error(picker, row.error)
+    for _, probe in pairs(row.probes or {}) do
+      if probe.state == "error" then record_error(picker, probe.error) end
+    end
+  end
+end
 
 local function width(text)
   return vim.fn.strdisplaywidth(tostring(text or ""))
@@ -153,7 +170,11 @@ function M.render(rows, maximum, selected_path, error)
     output.lines[#output.lines + 1] = "No worktrees"
   end
   output.lines[#output.lines + 1] = ""
-  output.lines[#output.lines + 1] = shorten("↵ open · [w/]w move · r refresh · F fetch · d remove · q close", maximum)
+  output.lines[#output.lines + 1] = keymaps.hints(
+    "worktrees",
+    maximum,
+    require("vigit.config").get()
+  )
   output.highlights[#output.highlights + 1] = { row = #output.lines, group = "Comment" }
   return output
 end
@@ -226,6 +247,7 @@ local function refresh(picker)
   if picker.pending_list and picker.pending_list.cancel then pcall(picker.pending_list.cancel) end
   picker.pending_list = picker.app:list(picker.origin, function(result)
     if picker.closed or result.ok then return end
+    record_error(picker, result.error)
     picker.error = result.error
     picker:render_now()
   end)
@@ -266,7 +288,10 @@ function M.open(opts)
     return active_picker
   end
   local window, geometry_error = geometry()
-  if not window then return nil, geometry_error end
+  if not window then
+    log.push(geometry_error)
+    return nil, geometry_error
+  end
   local picker = {
     app = app,
     origin = origin,
@@ -276,6 +301,7 @@ function M.open(opts)
     row_by_path = {},
     selected_path = opts.selected_path,
     namespace = nil,
+    logged_errors = setmetatable({}, { __mode = "k" }),
   }
   namespace_id = namespace_id + 1
   picker.namespace = vim.api.nvim_create_namespace("vigit-v2-worktrees-" .. namespace_id)
@@ -324,6 +350,7 @@ function M.open(opts)
       if result.ok then
         close(self, false)
       else
+        record_error(self, result.error)
         self.error = result.error
         self:render_now()
       end
@@ -341,6 +368,7 @@ function M.open(opts)
       self.pending_fetch = nil
       if self.closed then return end
       if not result.ok then
+        record_error(self, result.error)
         self.error = result.error
         self:render_now()
         return
@@ -360,6 +388,7 @@ function M.open(opts)
       self.pending_remove = nil
       if self.closed then return end
       if not result.ok then
+        record_error(self, result.error)
         self.error = result.error
         self:render_now()
         return
@@ -374,6 +403,7 @@ function M.open(opts)
 
   app:set_on_update(function(rows)
     if picker.closed then return end
+    record_row_errors(picker, rows)
     picker.rows = rows
     if picker.render_pending then return end
     picker.render_pending = true

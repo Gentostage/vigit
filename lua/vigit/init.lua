@@ -8,6 +8,9 @@ function M.setup(opts)
   if not configured.ok then
     return nil, configured.error
   end
+  if vim.uv and vim.api.nvim_create_augroup and vim.api.nvim_create_autocmd then
+    require("vigit.v2").setup_observers()
+  end
   if commands_registered then
     return true
   end
@@ -107,10 +110,16 @@ function M.setup(opts)
     desc = "Preview and explicitly import legacy review comments into VigitV2",
   })
   vim.api.nvim_create_user_command("VigitHelp", function()
-    require("vigit.help").open()
+    require("vigit.ui.views.help").open()
   end, {
     force = true,
     desc = "Show Vigit key mappings",
+  })
+  vim.api.nvim_create_user_command("VigitLog", function()
+    require("vigit.ui.log").open()
+  end, {
+    force = true,
+    desc = "Show Vigit diagnostics",
   })
   vim.api.nvim_create_user_command("VigitInstallCodexSkill", function(opts)
     local function install(force)
