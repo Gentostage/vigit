@@ -169,6 +169,8 @@ it("hands identical relative paths to distinct reusable source tabs per root", f
 
     assert_truthy(tab_a ~= tab_b)
     assert_truthy(buf_a ~= buf_b)
+    assert_equal(vim.bo[buf_a].buflisted, true)
+    assert_equal(vim.bo[buf_b].buflisted, true)
     assert_equal(
       vim.api.nvim_buf_get_name(buf_a),
       assert(vim.uv.fs_realpath(repo_a.root .. "/src/service.py"))
@@ -209,6 +211,7 @@ it("hands identical relative paths to distinct reusable source tabs per root", f
     local other_buf = vim.api.nvim_get_current_buf()
     source_buffers[#source_buffers + 1] = other_buf
     assert_equal(reused_tab, tab_a)
+    assert_equal(vim.bo[other_buf].buflisted, true)
     assert_equal(
       vim.api.nvim_buf_get_name(other_buf),
       assert(vim.uv.fs_realpath(repo_a.root .. "/src/other.py"))

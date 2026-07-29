@@ -185,6 +185,7 @@ function M.open_file(context, done)
   local ok, message = xpcall(function()
     local buffer = vim.fn.bufadd(context.path)
     vim.fn.bufload(buffer)
+    vim.bo[buffer].buflisted = true
 
     local tab = M.find_source_tab(context.root)
     local reused = tab ~= nil
