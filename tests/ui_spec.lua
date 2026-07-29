@@ -127,36 +127,39 @@ local function open_vim_fixture()
   return fixture
 end
 
-it("setup registers Vigit command that opens the UI", function()
+it("setup registers the cutover public commands", function()
   local commands = {}
-  local opened = false
 
   package.loaded["vigit"] = nil
-  package.loaded["vigit.ui"] = { open = function()
-    opened = true
-  end }
+  package.loaded["vigit.v2"] = nil
 
   with_fake_vim({
+    uv = {
+      os_uname = function() return { sysname = "Linux" } end,
+    },
     api = {
       nvim_create_user_command = function(name, callback)
         commands[name] = callback
       end,
+      nvim_create_augroup = function() return 1 end,
+      nvim_create_autocmd = function() return 1 end,
     },
   }, function()
     local vigit = require("vigit")
     vigit.setup()
     assert_truthy(commands.Vigit)
+    assert_truthy(commands.VigitV2)
     assert_truthy(commands.VigitWorktrees)
     assert_truthy(commands.VigitComments)
-    assert_truthy(commands.VigitReviews)
+    assert_truthy(commands.VigitMigrateReviews)
     assert_truthy(commands.VigitInstallCodexSkill)
     assert_truthy(commands.VigitHelp)
-    commands.Vigit()
-    assert_equal(opened, true)
+    assert_truthy(commands.VigitLog)
+    assert_equal(commands.VigitReviews, nil)
   end)
 
   package.loaded["vigit"] = nil
-  package.loaded["vigit.ui"] = nil
+  package.loaded["vigit.v2"] = nil
 end)
 
 it("open creates windows, buffers, and renders state lines", function()

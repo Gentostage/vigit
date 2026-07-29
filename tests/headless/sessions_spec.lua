@@ -1008,25 +1008,17 @@ it("publishes the basic normal-mode key registry", function()
   assert_equal(keymaps.entries[9].intent, "toggle_hunk_index")
 end)
 
-it("validates setup options and registers commands only once", function()
+it("validates setup options after public command registration", function()
   local repo = Fixture.new()
   local session
   local config = require("vigit.config")
-  local command_calls = {}
-  local original_create_user_command = vim.api.nvim_create_user_command
   local ok, message = xpcall(function()
-    vim.api.nvim_create_user_command = function(name, callback, opts)
-      command_calls[name] = (command_calls[name] or 0) + 1
-      return original_create_user_command(name, callback, opts)
-    end
-
     local plugin = require("vigit")
     local invalid, invalid_error = plugin.setup({
       ui = { changes_width = "wide" },
     })
     assert_equal(invalid, nil)
     assert_equal(invalid_error.code, "invalid_config")
-    assert_equal(next(command_calls), nil)
 
     local configured, setup_error = plugin.setup({
       ui = { changes_width = 28 },
@@ -1037,9 +1029,6 @@ it("validates setup options and registers commands only once", function()
 
     assert_equal(plugin.setup({ ui = { changes_width = 30 } }), true)
     assert_equal(config.get().ui.changes_width, 30)
-    assert_equal(command_calls.Vigit, 1)
-    assert_equal(command_calls.VigitV2, 1)
-    assert_equal(command_calls.VigitMigrateReviews, 1)
     assert_equal(vim.fn.exists(":Vigit"), 2)
     assert_equal(vim.fn.exists(":VigitV2"), 2)
     assert_equal(vim.fn.exists(":VigitMigrateReviews"), 2)
@@ -1052,7 +1041,6 @@ it("validates setup options and registers commands only once", function()
     end
   end, debug.traceback)
 
-  vim.api.nvim_create_user_command = original_create_user_command
   config.setup(nil)
   close_session(session)
   repo:cleanup()

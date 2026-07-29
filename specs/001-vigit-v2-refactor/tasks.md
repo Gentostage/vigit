@@ -71,7 +71,7 @@ jumplist и lifecycle; syntax работает до открытия файла.
   по [Plan 04, Task 3](./plans/04-worktrees-and-cutover.md#task-3-safe-worktree-removal).
 - [x] T020 Централизовать keymaps/help/docs, refresh observers и `:VigitLog` по
   [Plan 04, Task 4](./plans/04-worktrees-and-cutover.md#task-4-central-help-refresh-observers-и-diagnostics).
-- [ ] T021 Переключить public API/commands на v2 и сохранить `:VigitV2` alias
+- [x] T021 Переключить public API/commands на v2 и сохранить `:VigitV2` alias
   по [Plan 04, Task 5](./plans/04-worktrees-and-cutover.md#task-5-public-cutover-legacy-removal-и-project-documentation).
 - [ ] T022 Заменить legacy tests эквивалентными v2 scenarios и только затем
   удалить legacy modules по
