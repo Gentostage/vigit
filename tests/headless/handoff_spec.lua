@@ -87,6 +87,14 @@ local function tab_var(tab, name)
   return vim.api.nvim_tabpage_get_var(tab, name)
 end
 
+local function tab_cwd(tab)
+  local current = vim.api.nvim_get_current_tabpage()
+  vim.api.nvim_set_current_tabpage(tab)
+  local cwd = vim.fn.getcwd(0, 0)
+  vim.api.nvim_set_current_tabpage(current)
+  return cwd
+end
+
 local function vigit_lsp_attach_count(buffer)
   local count = 0
   for _, autocmd in ipairs(vim.api.nvim_get_autocmds({
@@ -178,6 +186,9 @@ it("hands identical relative paths to distinct reusable source tabs per root", f
     assert_equal(tab_var(tab_b, "vigit_branch"), session_b.branch)
     assert_equal(tab_var(tab_a, "vigit_role"), "source")
     assert_equal(tab_var(tab_b, "vigit_role"), "source")
+    assert_equal(tab_cwd(tab_a), session_a.root)
+    assert_equal(tab_cwd(tab_b), session_b.root)
+    assert_equal(vim.fn.getcwd(-1, -1), original_cwd)
     assert_truthy(tab_var(tab_a, "vigit_label"):find("service.py", 1, true))
     assert_truthy(tab_var(tab_b, "vigit_label"):find("service.py", 1, true))
     assert_equal(neovim.find_source_tab(session_a.root), tab_a)
@@ -204,6 +215,7 @@ it("hands identical relative paths to distinct reusable source tabs per root", f
     )
     assert_equal(tab_var(tab_a, "vigit_root"), session_a.root)
     assert_equal(tab_var(tab_a, "vigit_role"), "source")
+    assert_equal(tab_cwd(tab_a), session_a.root)
     assert_truthy(tab_var(tab_a, "vigit_label"):find("other.py", 1, true))
     local previous_source = vim.api.nvim_buf_get_mark(buf_a, "'")
     assert_equal(previous_source[1], target_a.source_line)
@@ -231,7 +243,6 @@ it("hands identical relative paths to distinct reusable source tabs per root", f
     assert_equal(vim.api.nvim_buf_is_valid(buf_a), true)
     assert_equal(vim.api.nvim_buf_is_valid(buf_b), true)
     assert_equal(vim.fn.getcwd(-1, -1), original_cwd)
-    assert_equal(vim.fn.getcwd(0, 0), original_cwd)
     local cursor_a = vim.api.nvim_win_get_cursor(vim.fn.bufwinid(other_buf))
     assert_equal(cursor_a[1], target_other.source_line)
     assert_equal(cursor_a[2], 2)

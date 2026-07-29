@@ -11,6 +11,8 @@ local fallback_backgrounds = {
   },
 }
 
+local diff_tint = 0.35
+
 M.priorities = {
   background = 10,
   sign = 20,
@@ -36,12 +38,53 @@ local function source_background(group, kind)
   return fallback_backgrounds[background][kind]
 end
 
+local function highlight_background(group)
+  local ok, highlight = pcall(vim.api.nvim_get_hl, 0, {
+    name = group,
+    link = false,
+  })
+  if ok and type(highlight) == "table" then
+    return highlight.bg
+  end
+end
+
+local function color_channel(color, shift)
+  return math.floor(color / 2 ^ shift) % 0x100
+end
+
+local function blend_channel(background, foreground)
+  return math.floor(
+    background + (foreground - background) * diff_tint + 0.5
+  )
+end
+
+local function blend_background(color)
+  local normal = highlight_background("Normal")
+  if not normal then
+    return color
+  end
+
+  local red = blend_channel(
+    color_channel(normal, 16),
+    color_channel(color, 16)
+  )
+  local green = blend_channel(
+    color_channel(normal, 8),
+    color_channel(color, 8)
+  )
+  local blue = blend_channel(
+    color_channel(normal, 0),
+    color_channel(color, 0)
+  )
+  return red * 0x10000 + green * 0x100 + blue
+end
+
 local function setup_line_backgrounds()
   vim.api.nvim_set_hl(0, "VigitDiffAddLine", {
-    bg = source_background("DiffAdd", "add"),
+    bg = blend_background(source_background("DiffAdd", "add")),
   })
   vim.api.nvim_set_hl(0, "VigitDiffDeleteLine", {
-    bg = source_background("DiffDelete", "delete"),
+    bg = blend_background(source_background("DiffDelete", "delete")),
   })
 end
 
@@ -260,6 +303,25 @@ local function symbol_at(symbols, source_row)
   return best
 end
 
+local function hunk_describes_symbol(rendered, gap_row, symbol)
+  local hunk = rendered.rows and rendered.rows[gap_row + 1]
+  if not hunk
+      or hunk.kind ~= "hunk"
+      or hunk.change_id ~= rendered.rows[gap_row].change_id then
+    return false
+  end
+
+  local text = hunk.text or ""
+  if symbol.name and text:find(symbol.name, 1, true) then
+    return true
+  end
+
+  local owner = symbol.label
+      and symbol.label:match("^(.+)%.[^.]+%(%)$")
+    or nil
+  return owner ~= nil and text:find(owner, 1, true) ~= nil
+end
+
 local function add_symbol_layers(buffer, rendered, inspections, namespace)
   local visible = visible_source_rows(rendered)
   for buffer_row, rendered_row in ipairs(rendered.rows or {}) do
@@ -278,7 +340,8 @@ local function add_symbol_layers(buffer, rendered, inspections, namespace)
       local visible_rows = visible[rendered_row.change_id] or {}
       if symbol
           and symbol.label
-          and not visible_rows[symbol.declaration_row] then
+          and not visible_rows[symbol.declaration_row]
+          and not hunk_describes_symbol(rendered, buffer_row, symbol) then
         vim.api.nvim_buf_set_extmark(
           buffer,
           namespace,

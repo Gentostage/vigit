@@ -182,10 +182,12 @@ it("maps old/new captures onto marker-free rows with layered priorities", functi
       name = "DiffDelete",
       link = true,
     }),
+    Normal = vim.api.nvim_get_hl(0, { name = "Normal", link = true }),
   }
   local original_background = vim.o.background
   local setup_ok, setup_message = xpcall(function()
     vim.o.background = "dark"
+    vim.api.nvim_set_hl(0, "Normal", { bg = 0x101010 })
     vim.api.nvim_set_hl(0, "DiffAdd", {
       fg = 0xfefefe,
       bg = 0x112233,
@@ -209,20 +211,21 @@ it("maps old/new captures onto marker-free rows with layered priorities", functi
       name = "VigitDiffDeleteLine",
       link = false,
     })
-    assert_equal(add_line.bg, 0x112233)
+    assert_equal(add_line.bg, 0x10161c)
     assert_equal(add_line.fg, nil)
     assert_equal(add_line.bold, nil)
-    assert_equal(delete_line.bg, 0x3b2426)
+    assert_equal(delete_line.bg, 0x1f1718)
     assert_equal(delete_line.fg, nil)
     assert_equal(delete_line.italic, nil)
 
     vim.o.background = "light"
+    vim.api.nvim_set_hl(0, "Normal", { bg = 0xfefefe })
     highlights.setup()
     delete_line = vim.api.nvim_get_hl(0, {
       name = "VigitDiffDeleteLine",
       link = false,
     })
-    assert_equal(delete_line.bg, 0xf6d6d8)
+    assert_equal(delete_line.bg, 0xfbf0f1)
     assert_equal(delete_line.fg, nil)
   end, debug.traceback)
   vim.o.background = original_background
@@ -625,6 +628,37 @@ it("labels only hidden declarations and discards stale scheduled inspection", fu
     buffer,
     namespace,
     2,
+    function(details)
+      return details.virt_text ~= nil
+    end
+  ), nil)
+
+  local hunk_context = {
+    lines = {
+      "… 3 unchanged lines …",
+      "@@ -4 +4 @@ class PaymentService:",
+    },
+    rows = {
+      {
+        text = "… 3 unchanged lines …",
+        kind = "gap",
+        change_id = change_id,
+        source_anchor = { side = "new", source_line = 4 },
+      },
+      {
+        text = "@@ -4 +4 @@ class PaymentService:",
+        kind = "hunk",
+        change_id = change_id,
+        source_anchor = { side = "new", source_line = 4 },
+      },
+    },
+  }
+  vim.api.nvim_buf_set_lines(buffer, 0, -1, false, hunk_context.lines)
+  highlights.apply_diff(buffer, hunk_context, inspections, namespace)
+  assert_equal(find_extmark(
+    buffer,
+    namespace,
+    1,
     function(details)
       return details.virt_text ~= nil
     end

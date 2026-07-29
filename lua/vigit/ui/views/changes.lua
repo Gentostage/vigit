@@ -154,17 +154,6 @@ local function build_tree(changes)
   return root
 end
 
-local function compact_directory(directory)
-  local names = { escape_control(directory.name) }
-  local deepest = directory
-  while #deepest.entries == 1
-      and deepest.entries[1].kind == "directory" do
-    deepest = deepest.entries[1]
-    names[#names + 1] = escape_control(deepest.name)
-  end
-  return table.concat(names, "/"), deepest
-end
-
 local status_groups = {
   A = "VigitChangesAdded",
   C = "VigitChangesAdded",
@@ -180,20 +169,23 @@ local function render_tree_node(output, node, depth, width, icons)
   local indent = string.rep(" ", depth)
   for _, entry in ipairs(node.entries) do
     if entry.kind == "directory" then
-      local label, deepest = compact_directory(entry)
       local icon, group = icons.directory()
       local row = add_styled_line(output, {
         { text = indent },
         {
-          text = string.format("%s %s/", icon, label),
+          text = string.format(
+            "%s %s/",
+            icon,
+            escape_control(entry.name)
+          ),
           group = group or "VigitChangesDirectory",
         },
       }, width)
       add_target(output, row, {
         kind = "directory",
-        path = deepest.path,
+        path = entry.path,
       })
-      render_tree_node(output, deepest, depth + 1, width, icons)
+      render_tree_node(output, entry, depth + 1, width, icons)
     else
       local change = entry.change
       local icon, group = icons.file(entry.name, change.path)

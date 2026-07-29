@@ -641,7 +641,7 @@ it("returns file hit targets and marker-free view models", function()
   assert_equal(diff.lines[hunk_row + 3], long_line)
 end)
 
-it("renders compact tree paths with semantic status and icon highlights", function()
+it("renders every tree directory with semantic status and icon highlights", function()
   local state = {
     view = { changes_mode = "tree" },
     data = {
@@ -682,13 +682,16 @@ it("renders compact tree paths with semantic status and icon highlights", functi
   local output = changes_view.render(state, 40, { icons = icons })
   assert_equal(table.concat(output.lines, "\n"), table.concat({
     "Staged (3)",
-    "D lua/demo/",
-    " D features/",
-    "  D checkout/presentation/",
-    "   A L invoice.lua",
-    "  D orders/application/",
-    "   M L order.lua",
-    " D L format.lua",
+    "D lua/",
+    " D demo/",
+    "  D features/",
+    "   D checkout/",
+    "    D presentation/",
+    "     A L invoice.lua",
+    "   D orders/",
+    "    D application/",
+    "     M L order.lua",
+    "  D L format.lua",
   }, "\n"))
   assert_equal(highlighted_text(
     output,
@@ -697,7 +700,7 @@ it("renders compact tree paths with semantic status and icon highlights", functi
   assert_equal(highlighted_text(
     output,
     "VigitChangesDirectory"
-  )[1], "D lua/demo/")
+  )[1], "D lua/")
   assert_equal(highlighted_text(
     output,
     "VigitChangesAdded"
@@ -711,10 +714,10 @@ it("renders compact tree paths with semantic status and icon highlights", functi
     "VigitChangesDeleted"
   )[1], "D")
   assert_equal(highlighted_text(output, "DevIconLua")[1], "L invoice.lua")
-  assert_equal(#output.targets, 7)
+  assert_equal(#output.targets, 10)
 end)
 
-it("applies compact tree highlight spans to the changes buffer", function()
+it("applies hierarchical tree highlight spans to the changes buffer", function()
   local repo = Fixture.new()
   local session
   local ok, message = xpcall(function()

@@ -196,6 +196,9 @@ function M.open_file(context, done)
     end
 
     local window = vim.api.nvim_get_current_win()
+    vim.api.nvim_win_call(window, function()
+      vim.cmd("tcd " .. vim.fn.fnameescape(context.root))
+    end)
     if reused then
       vim.api.nvim_win_call(window, function()
         vim.cmd("normal! m'")
