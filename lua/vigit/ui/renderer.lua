@@ -91,12 +91,25 @@ end
 local function add_view_highlights(buffer, namespace, output)
   vim.api.nvim_buf_clear_namespace(buffer, namespace, 0, -1)
   for _, highlight in ipairs(output.highlights or {}) do
-    vim.api.nvim_buf_set_extmark(buffer, namespace, highlight.row - 1, 0, {
-      end_row = highlight.row,
+    local options = {
       hl_group = highlight.group,
-      hl_eol = true,
       strict = false,
-    })
+    }
+    local column = highlight.start_col or 0
+    if highlight.start_col ~= nil and highlight.end_col ~= nil then
+      options.end_row = highlight.row - 1
+      options.end_col = highlight.end_col
+    else
+      options.end_row = highlight.row
+      options.hl_eol = true
+    end
+    vim.api.nvim_buf_set_extmark(
+      buffer,
+      namespace,
+      highlight.row - 1,
+      column,
+      options
+    )
   end
 end
 
@@ -397,6 +410,7 @@ function M.render(session)
     return
   end
 
+  diff_highlights.setup()
   local changes = changes_view.render(
     session,
     window_width(session.owned.changes_win)

@@ -50,6 +50,15 @@ function M.setup()
   set_link("VigitDiffAddSign", "Added")
   set_link("VigitDiffDeleteSign", "Removed")
   set_link("VigitSymbolContext", "Function")
+  set_link("VigitChangesStagedHeader", "Added")
+  set_link("VigitChangesUnstagedHeader", "DiagnosticWarn")
+  set_link("VigitChangesDirectory", "Directory")
+  set_link("VigitChangesFile", "Normal")
+  set_link("VigitChangesAdded", "Added")
+  set_link("VigitChangesDeleted", "Removed")
+  set_link("VigitChangesModified", "DiagnosticWarn")
+  set_link("VigitChangesUntracked", "DiagnosticInfo")
+  set_link("VigitChangesConflict", "DiagnosticError")
 end
 
 local function add_line_layer(buffer, namespace, row, kind)
@@ -113,13 +122,50 @@ local function capture_intersects(capture, source_row)
   return true
 end
 
+local function resolve_capture_group(group, language, cache)
+  if cache[group] ~= nil then
+    return cache[group] or nil
+  end
+
+  local candidate = tostring(group or "")
+  local language_suffix = "." .. tostring(language or "")
+  if language_suffix ~= "."
+      and candidate:sub(-#language_suffix) == language_suffix then
+    candidate = candidate:sub(1, -#language_suffix - 1)
+  end
+  if candidate == "@none" then
+    cache[group] = false
+    return nil
+  end
+  while candidate:sub(1, 1) == "@" do
+    local ok, definition = pcall(vim.api.nvim_get_hl, 0, {
+      name = candidate,
+      link = true,
+    })
+    if ok and type(definition) == "table" and next(definition) ~= nil then
+      cache[group] = candidate
+      return candidate
+    end
+    local shorter = candidate:gsub("%.[^.]+$", "")
+    if shorter == candidate then
+      break
+    end
+    candidate = shorter
+  end
+
+  cache[group] = false
+  return nil
+end
+
 local function add_capture(
     buffer,
     namespace,
     buffer_row,
     text,
     source_row,
-    capture
+    capture,
+    language,
+    group_cache
 )
   if not capture_intersects(capture, source_row) then
     return
@@ -137,6 +183,10 @@ local function add_capture(
     return
   end
 
+  local group = resolve_capture_group(capture.group, language, group_cache)
+  if not group then
+    return
+  end
   local priority = tonumber(capture.priority)
   if not priority or priority % 1 ~= 0 then
     priority = M.priorities.syntax
@@ -144,7 +194,7 @@ local function add_capture(
   vim.api.nvim_buf_set_extmark(buffer, namespace, buffer_row - 1, start_col, {
     end_row = buffer_row - 1,
     end_col = end_col,
-    hl_group = capture.group,
+    hl_group = group,
     hl_mode = "combine",
     priority = priority,
     strict = false,
@@ -152,6 +202,7 @@ local function add_capture(
 end
 
 local function add_syntax_layers(buffer, rendered, inspections, namespace)
+  local group_cache = {}
   for buffer_row, rendered_row in ipairs(rendered.rows or {}) do
     local side = row_side(rendered_row)
     local source_anchor = rendered_row.source_anchor
@@ -167,7 +218,9 @@ local function add_syntax_layers(buffer, rendered, inspections, namespace)
           buffer_row,
           rendered_row.text or "",
           source_row,
-          capture
+          capture,
+          inspection.language,
+          group_cache
         )
       end
     end

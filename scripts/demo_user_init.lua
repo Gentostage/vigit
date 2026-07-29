@@ -29,6 +29,21 @@ package.path = table.concat({
   package.path,
 }, ";")
 
+-- lazy.nvim installs its own module searcher ahead of Lua's package.path
+-- searcher. Prefer the checkout explicitly so --user-config never mixes the
+-- installed release with the code currently being developed.
+local module_searchers = package.searchers or package.loaders
+table.insert(module_searchers, 2, function(name)
+  if name ~= "vigit" and not name:match("^vigit%.") then
+    return nil
+  end
+  local path, search_error = package.searchpath(name, package.path)
+  if not path or path:sub(1, #project_root + 1) ~= project_root .. "/" then
+    return search_error
+  end
+  return assert(loadfile(path)), path
+end)
+
 local vigit = assert(loadfile(project_root .. "/lua/vigit/init.lua"))()
 package.loaded.vigit = vigit
 local setup_ok, setup_error = vigit.setup()

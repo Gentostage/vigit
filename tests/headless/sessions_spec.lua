@@ -32,6 +32,19 @@ local function find_line(buffer, pattern)
   end
 end
 
+local function highlighted_text(output, group)
+  local values = {}
+  for _, highlight in ipairs(output.highlights or {}) do
+    if highlight.group == group then
+      local line = output.lines[highlight.row]
+      local start_col = highlight.start_col or 0
+      local end_col = highlight.end_col or #line
+      values[#values + 1] = line:sub(start_col + 1, end_col)
+    end
+  end
+  return values
+end
+
 local function owned_buffer_count(session)
   local count = 0
   for key, handle in pairs(session.owned) do
@@ -147,6 +160,57 @@ it("owns one isolated review tab and two nofile buffers per canonical root", fun
     close_session(session)
   end
   cleanup_fixtures({ repo_a, repo_b })
+  if not ok then
+    error(message, 0)
+  end
+end)
+
+it("keeps the changes sidebar compact under inherited user window options", function()
+  local repo = Fixture.new()
+  local session
+  local original_window = vim.api.nvim_get_current_win()
+  local original_columns = vim.o.columns
+  local option_names = {
+    "number",
+    "relativenumber",
+    "signcolumn",
+    "foldcolumn",
+    "statuscolumn",
+    "wrap",
+  }
+  local original_options = {}
+  for _, name in ipairs(option_names) do
+    original_options[name] = vim.wo[original_window][name]
+  end
+
+  local ok, message = xpcall(function()
+    vim.o.columns = 200
+    vim.wo[original_window].number = true
+    vim.wo[original_window].relativenumber = true
+    vim.wo[original_window].signcolumn = "yes"
+    vim.wo[original_window].foldcolumn = "2"
+    vim.wo[original_window].statuscolumn = "%l "
+    vim.wo[original_window].wrap = true
+
+    session = assert(v2.open({ cwd = repo.root }))
+    local window = session.owned.changes_win
+    assert_equal(vim.wo[window].number, false)
+    assert_equal(vim.wo[window].relativenumber, false)
+    assert_equal(vim.wo[window].signcolumn, "no")
+    assert_equal(vim.wo[window].foldcolumn, "0")
+    assert_equal(vim.wo[window].statuscolumn, "")
+    assert_equal(vim.wo[window].wrap, false)
+    assert_equal(vim.api.nvim_win_get_width(window), 28)
+  end, debug.traceback)
+
+  close_session(session)
+  vim.o.columns = original_columns
+  if vim.api.nvim_win_is_valid(original_window) then
+    for name, value in pairs(original_options) do
+      vim.wo[original_window][name] = value
+    end
+  end
+  repo:cleanup()
   if not ok then
     error(message, 0)
   end
@@ -575,6 +639,126 @@ it("returns file hit targets and marker-free view models", function()
   assert_equal(diff.lines[hunk_row + 1], "return false")
   assert_equal(diff.lines[hunk_row + 2], "return true")
   assert_equal(diff.lines[hunk_row + 3], long_line)
+end)
+
+it("renders compact tree paths with semantic status and icon highlights", function()
+  local state = {
+    view = { changes_mode = "tree" },
+    data = {
+      status = {
+        staged = {
+          {
+            id = "staged\0invoice",
+            section = "staged",
+            status = "A",
+            path = "lua/demo/features/checkout/presentation/invoice.lua",
+          },
+          {
+            id = "staged\0order",
+            section = "staged",
+            status = "M",
+            path = "lua/demo/features/orders/application/order.lua",
+          },
+          {
+            id = "staged\0format",
+            section = "staged",
+            status = "D",
+            path = "lua/demo/format.lua",
+          },
+        },
+        unstaged = {},
+      },
+    },
+  }
+  local icons = {
+    directory = function()
+      return "D", "VigitChangesDirectory"
+    end,
+    file = function()
+      return "L", "DevIconLua"
+    end,
+  }
+
+  local output = changes_view.render(state, 40, { icons = icons })
+  assert_equal(table.concat(output.lines, "\n"), table.concat({
+    "Staged (3)",
+    "D lua/demo/",
+    " D features/",
+    "  D checkout/presentation/",
+    "   A L invoice.lua",
+    "  D orders/application/",
+    "   M L order.lua",
+    " D L format.lua",
+  }, "\n"))
+  assert_equal(highlighted_text(
+    output,
+    "VigitChangesStagedHeader"
+  )[1], "Staged (3)")
+  assert_equal(highlighted_text(
+    output,
+    "VigitChangesDirectory"
+  )[1], "D lua/demo/")
+  assert_equal(highlighted_text(
+    output,
+    "VigitChangesAdded"
+  )[1], "A")
+  assert_equal(highlighted_text(
+    output,
+    "VigitChangesModified"
+  )[1], "M")
+  assert_equal(highlighted_text(
+    output,
+    "VigitChangesDeleted"
+  )[1], "D")
+  assert_equal(highlighted_text(output, "DevIconLua")[1], "L invoice.lua")
+  assert_equal(#output.targets, 7)
+end)
+
+it("applies compact tree highlight spans to the changes buffer", function()
+  local repo = Fixture.new()
+  local session
+  local ok, message = xpcall(function()
+    repo:write("src/tracked.lua", { "return 'old'" })
+    repo:git({ "add", "--", "src/tracked.lua" })
+    repo:commit("initial")
+    repo:write("src/tracked.lua", { "return 'new'" })
+
+    session = assert(v2.open({ cwd = repo.root }))
+    assert_truthy(vim.wait(2000, function()
+      return session.data.status ~= nil and session.busy.status == nil
+    end, 10))
+    local namespace = assert(vim.api.nvim_get_namespaces()[
+      "vigit-v2-" .. tostring(session.id) .. "-changes"
+    ])
+    local groups = {}
+    for _, extmark in ipairs(vim.api.nvim_buf_get_extmarks(
+      session.owned.changes_buf,
+      namespace,
+      0,
+      -1,
+      { details = true }
+    )) do
+      local details = extmark[4]
+      details.col = extmark[3]
+      groups[details.hl_group] = details
+    end
+
+    assert_truthy(groups.VigitChangesUnstagedHeader ~= nil)
+    assert_truthy(groups.VigitChangesDirectory ~= nil)
+    assert_equal(
+      groups.VigitChangesModified.end_col
+        - groups.VigitChangesModified.col,
+      1
+    )
+    assert_truthy(groups.VigitChangesFile.end_col
+      > groups.VigitChangesFile.col)
+  end, debug.traceback)
+
+  close_session(session)
+  repo:cleanup()
+  if not ok then
+    error(message, 0)
+  end
 end)
 
 it("keeps loaded code visible during refresh and renders typed file placeholders", function()

@@ -93,6 +93,30 @@ it("tracks context line numbers and preserves no-newline metadata", function()
   })
 end)
 
+it("removes CR from display text while preserving exact hunk patch bytes", function()
+  local raw = table.concat({
+    "diff --git a/src/a.lua b/src/a.lua",
+    "--- a/src/a.lua",
+    "+++ b/src/a.lua",
+    "@@ -1 +1 @@",
+    "-local old = true\r",
+    "+local new = true\r",
+    "",
+  }, "\n")
+
+  local parsed = diff.parse(raw, change)
+
+  assert_truthy(parsed.ok)
+  assert_equal(parsed.value.hunks[1].lines[1].text, "local old = true")
+  assert_equal(parsed.value.hunks[1].lines[2].text, "local new = true")
+  assert_equal(parsed.value.hunks[1].patch, table.concat({
+    "@@ -1 +1 @@",
+    "-local old = true\r",
+    "+local new = true\r",
+  }, "\n"))
+  assert_equal(parsed.value.patch, raw)
+end)
+
 it("detects binary patches without fabricating hunks", function()
   local parsed = diff.parse(table.concat({
     "diff --git a/image.png b/image.png",

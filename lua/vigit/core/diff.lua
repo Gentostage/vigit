@@ -55,24 +55,29 @@ function M.parse(raw, change)
   local new_line
 
   for _, line in ipairs(split_lines(raw)) do
-    if line:match("^diff %-%-cc ")
-        or line:match("^diff %-%-combined ")
-        or line:sub(1, 4) == "@@@ " then
+    local display_line = line:gsub("\r$", "")
+    if display_line:match("^diff %-%-cc ")
+        or display_line:match("^diff %-%-combined ")
+        or display_line:sub(1, 4) == "@@@ " then
       return Result.err(
         "unsupported_combined_diff",
         "Combined conflict diffs are not supported",
-        line
+        display_line
       )
-    elseif line:sub(1, 3) == "@@ " then
+    elseif display_line:sub(1, 3) == "@@ " then
       finish_hunk(hunk)
-      local range = parse_hunk_header(line)
+      local range = parse_hunk_header(display_line)
       if not range then
-        return Result.err("malformed_diff", "Malformed unified diff hunk", line)
+        return Result.err(
+          "malformed_diff",
+          "Malformed unified diff hunk",
+          display_line
+        )
       end
 
       hunk = {
         id = change.id .. "\0" .. range.old_start .. ":" .. range.new_start,
-        header = line,
+        header = display_line,
         old_start = range.old_start,
         old_count = range.old_count,
         new_start = range.new_start,
@@ -83,14 +88,14 @@ function M.parse(raw, change)
       parsed.hunks[#parsed.hunks + 1] = hunk
       old_line = range.old_start
       new_line = range.new_start
-    elseif hunk and line:match("^[ +%-\\]") then
-      local marker = line:sub(1, 1)
+    elseif hunk and display_line:match("^[ +%-\\]") then
+      local marker = display_line:sub(1, 1)
       local diff_line
 
       if marker == "-" then
         diff_line = {
           kind = "delete",
-          text = line:sub(2),
+          text = display_line:sub(2),
           old_line = old_line,
           new_line = nil,
         }
@@ -98,7 +103,7 @@ function M.parse(raw, change)
       elseif marker == "+" then
         diff_line = {
           kind = "add",
-          text = line:sub(2),
+          text = display_line:sub(2),
           old_line = nil,
           new_line = new_line,
         }
@@ -106,7 +111,7 @@ function M.parse(raw, change)
       elseif marker == " " then
         diff_line = {
           kind = "context",
-          text = line:sub(2),
+          text = display_line:sub(2),
           old_line = old_line,
           new_line = new_line,
         }
@@ -115,7 +120,7 @@ function M.parse(raw, change)
       else
         diff_line = {
           kind = "meta",
-          text = line,
+          text = display_line,
           old_line = nil,
           new_line = nil,
         }
@@ -123,13 +128,18 @@ function M.parse(raw, change)
 
       hunk.lines[#hunk.lines + 1] = diff_line
       hunk.patch_lines[#hunk.patch_lines + 1] = line
-    elseif not hunk and line ~= "" then
+    elseif not hunk and display_line ~= "" then
       parsed.headers[#parsed.headers + 1] = line
-      if line:match("^Binary files .+ differ$") or line == "GIT binary patch" then
+      if display_line:match("^Binary files .+ differ$")
+          or display_line == "GIT binary patch" then
         parsed.binary = true
       end
-    elseif hunk and line:sub(1, 5) == "diff " then
-      return Result.err("malformed_diff", "Diff output contains multiple files", line)
+    elseif hunk and display_line:sub(1, 5) == "diff " then
+      return Result.err(
+        "malformed_diff",
+        "Diff output contains multiple files",
+        display_line
+      )
     end
   end
 

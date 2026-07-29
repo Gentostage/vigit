@@ -86,6 +86,86 @@ local function manual_inspection(captures, symbols)
   }
 end
 
+it("resolves undefined language captures to colorscheme groups", function()
+  local namespace = vim.api.nvim_create_namespace("vigit-test-syntax-fallback")
+  local buffer = vim.api.nvim_create_buf(false, true)
+  local groups = {
+    ["@keyword.import.python"] = vim.api.nvim_get_hl(0, {
+      name = "@keyword.import.python",
+      link = true,
+    }),
+    ["@keyword.import"] = vim.api.nvim_get_hl(0, {
+      name = "@keyword.import",
+      link = true,
+    }),
+    ["@keyword"] = vim.api.nvim_get_hl(0, {
+      name = "@keyword",
+      link = true,
+    }),
+  }
+
+  local ok, message = xpcall(function()
+    vim.api.nvim_set_hl(0, "@keyword.import.python", { fg = 0xff0000 })
+    vim.api.nvim_set_hl(0, "@keyword.import", {})
+    vim.api.nvim_set_hl(0, "@keyword", { fg = 0xc678dd })
+    local rendered = {
+      lines = { "from package import value" },
+      rows = {
+        {
+          text = "from package import value",
+          kind = "context",
+          change_id = "unstaged\0module.py",
+          source_anchor = { side = "new", source_line = 1 },
+        },
+      },
+    }
+    vim.api.nvim_buf_set_lines(buffer, 0, -1, false, rendered.lines)
+
+    highlights.apply_diff(buffer, rendered, {
+      ["unstaged\0module.py"] = {
+        new = manual_inspection({
+          {
+            group = "@keyword.import.python",
+            start_row = 0,
+            start_col = 0,
+            end_row = 0,
+            end_col = 4,
+          },
+          {
+            group = "@none.python",
+            start_row = 0,
+            start_col = 5,
+            end_row = 0,
+            end_col = 12,
+          },
+        }),
+      },
+    }, namespace)
+
+    local fallback = assert(find_extmark(
+      buffer,
+      namespace,
+      1,
+      function(details)
+        return details.hl_group == "@keyword"
+      end
+    ))
+    assert_equal(fallback.priority, highlights.priorities.syntax)
+    assert_equal(#syntax_extmarks(buffer, namespace, 1, {
+      ["@none"] = true,
+      ["@none.python"] = true,
+    }), 0)
+  end, debug.traceback)
+
+  for name, definition in pairs(groups) do
+    vim.api.nvim_set_hl(0, name, definition)
+  end
+  pcall(vim.api.nvim_buf_delete, buffer, { force = true })
+  if not ok then
+    error(message, 0)
+  end
+end)
+
 it("maps old/new captures onto marker-free rows with layered priorities", function()
   local namespace = vim.api.nvim_create_namespace("vigit-test-syntax-layers")
   local buffer = vim.api.nvim_create_buf(false, true)
@@ -274,19 +354,19 @@ it("maps old/new captures onto marker-free rows with layered priorities", functi
     buffer,
     namespace,
     1,
-    "@keyword.function.python"
+    "@keyword"
   ))
   local added_keyword = assert(has_group(
     buffer,
     namespace,
     2,
-    "@keyword.function.python"
+    "@keyword"
   ))
   assert_truthy(has_group(
     buffer,
     namespace,
     3,
-    "@keyword.return.python"
+    "@keyword"
   ))
   assert_equal(delete_background.priority, highlights.priorities.background)
   assert_equal(add_background.priority, highlights.priorities.background)
@@ -295,16 +375,16 @@ it("maps old/new captures onto marker-free rows with layered priorities", functi
   assert_equal(deleted_keyword.priority, highlights.priorities.syntax)
   assert_equal(added_keyword.priority, highlights.priorities.syntax)
   local overlaps = syntax_extmarks(buffer, namespace, 2, {
-    ["@variable.python"] = true,
-    ["@type.python"] = true,
-    ["@function.method.python"] = true,
+    ["@variable"] = true,
+    ["@type"] = true,
+    ["@function"] = true,
   })
   assert_equal(#overlaps, 3)
-  assert_equal(overlaps[1].hl_group, "@variable.python")
+  assert_equal(overlaps[1].hl_group, "@variable")
   assert_equal(overlaps[1].priority, highlights.priorities.syntax)
-  assert_equal(overlaps[2].hl_group, "@type.python")
+  assert_equal(overlaps[2].hl_group, "@type")
   assert_equal(overlaps[2].priority, highlights.priorities.syntax)
-  assert_equal(overlaps[3].hl_group, "@function.method.python")
+  assert_equal(overlaps[3].hl_group, "@function")
   assert_equal(overlaps[3].priority, 125)
   assert_truthy(highlights.priorities.overlay > 150)
   assert_equal(rendered.lines[1]:sub(1, 1), "d")
@@ -443,12 +523,12 @@ it("maps old/new captures onto marker-free rows with layered priorities", functi
         session.owned.diff_buf,
         -1,
         added,
-        "@keyword.function.python"
+        "@keyword"
       ) and has_group(
         session.owned.diff_buf,
         -1,
         deleted,
-        "@keyword.function.python"
+        "@keyword"
       )
     end, 10))
     assert_truthy(has_group(
@@ -654,7 +734,7 @@ it("labels only hidden declarations and discards stale scheduled inspection", fu
       session.owned.diff_buf,
       -1,
       stale_added,
-      "@keyword.function.python"
+      "@keyword"
     ), nil)
     assert_truthy(has_virtual_text(
       session.owned.diff_buf,
@@ -685,7 +765,7 @@ it("labels only hidden declarations and discards stale scheduled inspection", fu
       session.owned.diff_buf,
       -1,
       current_added,
-      "@keyword.function.python"
+      "@keyword"
     ))
     assert_equal(set_lines_calls, 0)
     assert_equal(has_virtual_text(

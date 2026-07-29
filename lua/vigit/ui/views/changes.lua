@@ -39,15 +39,51 @@ local function shorten(text, width)
   return vim.fn.strcharpart(text, 0, low) .. ellipsis
 end
 
+local function add_highlight(
+    output,
+    row,
+    group,
+    start_col,
+    end_col
+)
+  output.highlights[#output.highlights + 1] = {
+    row = row,
+    group = group,
+    start_col = start_col,
+    end_col = end_col,
+  }
+end
+
 local function add_line(output, line, highlight)
   output.lines[#output.lines + 1] = line
   if highlight then
-    output.highlights[#output.highlights + 1] = {
-      row = #output.lines,
-      group = highlight,
-    }
+    add_highlight(output, #output.lines, highlight)
   end
   return #output.lines
+end
+
+local function add_styled_line(output, segments, width)
+  local text = {}
+  for _, segment in ipairs(segments) do
+    text[#text + 1] = segment.text
+  end
+  local line = shorten(table.concat(text), width)
+  local row = add_line(output, line)
+  local cursor = 0
+  for _, segment in ipairs(segments) do
+    local start_col = cursor
+    cursor = cursor + #segment.text
+    if segment.group and start_col < #line then
+      add_highlight(
+        output,
+        row,
+        segment.group,
+        start_col,
+        math.min(cursor, #line)
+      )
+    end
+  end
+  return row
 end
 
 local function add_target(output, row, target)
@@ -83,46 +119,118 @@ local function render_list(output, changes, width)
   end
 end
 
-local function render_tree(output, changes, width)
-  local emitted = {}
-
+local function build_tree(changes)
+  local root = {
+    entries = {},
+    directories = {},
+  }
   for _, change in ipairs(changes) do
     local parts = path_parts(change.path)
-    local parent = ""
+    local parent = root
+    local path = ""
     for index = 1, #parts - 1 do
-      parent = parent == "" and parts[index] or parent .. "/" .. parts[index]
-      if not emitted[parent] then
-        emitted[parent] = true
-        local indent = string.rep("  ", index)
-        local row = add_line(
-          output,
-          shorten(indent .. "▾ " .. escape_control(parts[index]) .. "/", width)
-        )
-        add_target(output, row, {
+      local name = parts[index]
+      path = path == "" and name or path .. "/" .. name
+      local directory = parent.directories[name]
+      if not directory then
+        directory = {
           kind = "directory",
-          path = parent,
-        })
+          name = name,
+          path = path,
+          entries = {},
+          directories = {},
+        }
+        parent.directories[name] = directory
+        parent.entries[#parent.entries + 1] = directory
       end
+      parent = directory
     end
-
-    local indent = string.rep("  ", math.max(1, #parts))
-    local name = parts[#parts] or change.path
-    local row = add_line(
-      output,
-      shorten(
-        string.format("%s%s %s", indent, change.status, escape_control(name)),
-        width
-      )
-    )
-    add_target(output, row, {
+    parent.entries[#parent.entries + 1] = {
       kind = "change",
-      change_id = change.id,
+      name = parts[#parts] or change.path,
       change = change,
-    })
+    }
+  end
+  return root
+end
+
+local function compact_directory(directory)
+  local names = { escape_control(directory.name) }
+  local deepest = directory
+  while #deepest.entries == 1
+      and deepest.entries[1].kind == "directory" do
+    deepest = deepest.entries[1]
+    names[#names + 1] = escape_control(deepest.name)
+  end
+  return table.concat(names, "/"), deepest
+end
+
+local status_groups = {
+  A = "VigitChangesAdded",
+  C = "VigitChangesAdded",
+  D = "VigitChangesDeleted",
+  M = "VigitChangesModified",
+  R = "VigitChangesModified",
+  T = "VigitChangesModified",
+  U = "VigitChangesConflict",
+  ["?"] = "VigitChangesUntracked",
+}
+
+local function render_tree_node(output, node, depth, width, icons)
+  local indent = string.rep(" ", depth)
+  for _, entry in ipairs(node.entries) do
+    if entry.kind == "directory" then
+      local label, deepest = compact_directory(entry)
+      local icon, group = icons.directory()
+      local row = add_styled_line(output, {
+        { text = indent },
+        {
+          text = string.format("%s %s/", icon, label),
+          group = group or "VigitChangesDirectory",
+        },
+      }, width)
+      add_target(output, row, {
+        kind = "directory",
+        path = deepest.path,
+      })
+      render_tree_node(output, deepest, depth + 1, width, icons)
+    else
+      local change = entry.change
+      local icon, group = icons.file(entry.name, change.path)
+      local row = add_styled_line(output, {
+        { text = indent },
+        {
+          text = change.status,
+          group = status_groups[change.status]
+            or "VigitChangesModified",
+        },
+        { text = " " },
+        {
+          text = string.format("%s %s", icon, escape_control(entry.name)),
+          group = group or "VigitChangesFile",
+        },
+      }, width)
+      add_target(output, row, {
+        kind = "change",
+        change_id = change.id,
+        change = change,
+      })
+    end
   end
 end
 
-local function render_section(output, title, changes, mode, width)
+local function render_tree(output, changes, width, icons)
+  render_tree_node(output, build_tree(changes), 0, width, icons)
+end
+
+local function render_section(
+    output,
+    title,
+    changes,
+    mode,
+    width,
+    icons
+)
   if #changes == 0 then
     return
   end
@@ -130,15 +238,20 @@ local function render_section(output, title, changes, mode, width)
   if #output.lines > 0 then
     add_line(output, "")
   end
-  add_line(output, string.format("%s (%d)", title, #changes), "Title")
+  local header_group = title == "Staged"
+      and "VigitChangesStagedHeader"
+    or "VigitChangesUnstagedHeader"
+  add_line(output, string.format("%s (%d)", title, #changes), header_group)
   if mode == "list" then
     render_list(output, changes, width)
   else
-    render_tree(output, changes, width)
+    render_tree(output, changes, width, icons)
   end
 end
 
-function M.render(state, width)
+function M.render(state, width, opts)
+  opts = opts or {}
+  local icons = opts.icons or require("vigit.ui.icons")
   width = math.max(1, tonumber(width) or 1)
   local output = {
     lines = {},
@@ -169,8 +282,15 @@ function M.render(state, width)
   end
 
   local mode = state.view and state.view.changes_mode or "tree"
-  render_section(output, "Staged", status.staged or {}, mode, width)
-  render_section(output, "Unstaged", status.unstaged or {}, mode, width)
+  render_section(output, "Staged", status.staged or {}, mode, width, icons)
+  render_section(
+    output,
+    "Unstaged",
+    status.unstaged or {},
+    mode,
+    width,
+    icons
+  )
 
   if #output.targets == 0 then
     add_line(output, "No changes", "Comment")

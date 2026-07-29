@@ -11,7 +11,7 @@ local function valid_window(window)
 end
 
 local function changes_width()
-  return clamp(config.get().ui.changes_width, 24, 36)
+  return clamp(config.get().ui.changes_width, 24, 30)
 end
 
 local function configure_buffer(buffer, name, filetype)
@@ -44,6 +44,7 @@ local function open_changes_float(session, enter)
     enter,
     float_config()
   )
+  M.configure_changes_window(session.owned.changes_win)
   return session.owned.changes_win
 end
 
@@ -58,10 +59,25 @@ local function open_changes_split(session, enter)
   session.owned.changes_win = vim.api.nvim_get_current_win()
   vim.api.nvim_win_set_buf(session.owned.changes_win, session.owned.changes_buf)
   vim.api.nvim_win_set_width(session.owned.changes_win, changes_width())
+  M.configure_changes_window(session.owned.changes_win)
   if not enter and valid_window(previous) then
     vim.api.nvim_set_current_win(previous)
   end
   return session.owned.changes_win
+end
+
+function M.configure_changes_window(window)
+  if not valid_window(window) then
+    return
+  end
+  vim.wo[window].number = false
+  vim.wo[window].relativenumber = false
+  vim.wo[window].signcolumn = "no"
+  vim.wo[window].foldcolumn = "0"
+  vim.wo[window].statuscolumn = ""
+  vim.wo[window].wrap = false
+  vim.wo[window].cursorline = true
+  vim.wo[window].winfixwidth = true
 end
 
 local function close_changes_window(session)
@@ -166,6 +182,7 @@ function M.resize(session)
     end
     if changes_valid and current_float then
       vim.api.nvim_win_set_config(changes_win, float_config())
+      M.configure_changes_window(changes_win)
       return
     end
     if changes_valid then
@@ -177,6 +194,7 @@ function M.resize(session)
 
   if changes_valid and not current_float then
     vim.api.nvim_win_set_width(changes_win, changes_width())
+    M.configure_changes_window(changes_win)
     return
   end
   if changes_valid then

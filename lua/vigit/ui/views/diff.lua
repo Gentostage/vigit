@@ -255,15 +255,6 @@ local function render_file(output, change, diff, loading, file_error)
     return
   end
 
-  for _, header in ipairs(diff.headers or {}) do
-    add_line(
-      output,
-      escape_control(header),
-      "Comment",
-      nil,
-      row_metadata(change, diff, "meta", { side = file_side })
-    )
-  end
   if #(diff.hunks or {}) == 0 then
     add_line(
       output,
