@@ -22,21 +22,6 @@ local function basename(path)
     or tostring(path or "")
 end
 
-local function copy_row(entry, registry)
-  local row = {}
-  for key, value in pairs(entry) do row[key] = value end
-  row.name = row.name or basename(row.path)
-  row.files = nil
-  row.upstream = nil
-  row.probes = {
-    status = { state = "pending", error = nil },
-    upstream = { state = "pending", error = nil },
-  }
-  row.loading = true
-  row.open = registry and registry:get(row.path) ~= nil or false
-  return row
-end
-
 local function normalized_path(path, windows)
   local value = tostring(path or "")
   if windows then
@@ -53,6 +38,21 @@ end
 local function same_root(first, second, platform)
   local windows = is_windows(platform)
   return normalized_path(first, windows) == normalized_path(second, windows)
+end
+
+local function copy_row(entry, active_root, platform)
+  local row = {}
+  for key, value in pairs(entry) do row[key] = value end
+  row.name = row.name or basename(row.path)
+  row.files = nil
+  row.upstream = nil
+  row.probes = {
+    status = { state = "pending", error = nil },
+    upstream = { state = "pending", error = nil },
+  }
+  row.loading = true
+  row.active = active_root ~= nil and same_root(row.path, active_root, platform)
+  return row
 end
 
 local function session_at_root(registry, root, platform)
@@ -100,7 +100,8 @@ function M.new(opts)
     registry = opts.registry,
     neovim = opts.neovim,
     concurrency = math.max(1, math.min(4, tonumber(opts.concurrency) or 4)),
-    open_session = opts.open_session,
+    switch_session = opts.switch_session,
+    active_root = opts.active_root,
     on_update = opts.on_update,
     confirm = opts.confirm or confirm_worktree,
     close_session = opts.close_session,
@@ -110,6 +111,14 @@ function M.new(opts)
     request = nil,
     subscriber = nil,
   }, Worktrees)
+end
+
+function Worktrees:_active_root()
+  if type(self.active_root) ~= "function" then
+    return nil
+  end
+  local ok, root = pcall(self.active_root)
+  return ok and root or nil
 end
 
 local function paths_from_buffers(buffers, windows)
@@ -407,7 +416,11 @@ function Worktrees:list(origin, callback)
     end
 
     for index, entry in ipairs(result.value) do
-      self.rows[index] = copy_row(entry, self.registry)
+      self.rows[index] = copy_row(
+        entry,
+        self:_active_root(),
+        self.neovim and self.neovim.platform
+      )
     end
     request.remaining = #self.rows
     request.queue = {}
@@ -451,7 +464,11 @@ function Worktrees:list(origin, callback)
           end
           row.loading = row.probes.status.state == "pending" or row.probes.upstream.state == "pending"
           if not row.loading then
-            row.open = self.registry and self.registry:get(row.path) ~= nil or false
+            row.active = same_root(
+              row.path,
+              self:_active_root(),
+              self.neovim and self.neovim.platform
+            )
             request.remaining = request.remaining - 1
           end
           request.active = request.active - 1
@@ -517,30 +534,16 @@ function Worktrees:open(entry, callback)
       done(Result.err("worktree_missing", "Selected worktree no longer resolves to its own root"))
       return
     end
-    local existing = self.registry and self.registry:get(root)
-    if existing and not existing.closed then
-      local focused = not self.neovim.focus_session or self.neovim.focus_session(existing)
-      if focused then
-        done(Result.ok(existing))
-      else
-        done(Result.err("worktree_focus_failed", "Unable to focus existing Vigit session"))
-      end
+    if type(self.switch_session) ~= "function" then
+      done(Result.err("worktree_open_unavailable", "Worktree switcher is unavailable"))
       return
     end
-    if type(self.open_session) ~= "function" then
-      done(Result.err("worktree_open_unavailable", "Worktree session opener is unavailable"))
+    local switched = self.switch_session(root)
+    if not Result.is(switched) then
+      done(Result.err("worktree_open_failed", "Unable to switch Vigit worktree", switched))
       return
     end
-    local session, open_error = self.open_session(root)
-    if not session then
-      done(Result.err(
-        (open_error and open_error.code) or "worktree_missing",
-        (open_error and open_error.message) or "Worktree no longer exists",
-        open_error
-      ))
-      return
-    end
-    done(Result.ok(session))
+    done(switched)
   end))
   return { cancel = cancel }
 end

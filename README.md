@@ -19,8 +19,8 @@ Keyboard-first интерфейс для проверки diff, быстрых �
 - all-files и one-file diff с TreeSitter-подсветкой обеих сторон;
 - stage/unstage файла или отдельного hunk;
 - безопасный откат hunk/file с `y/N` и повторной проверкой stale state;
-- отдельная Vigit session для каждого Git worktree;
-- обычные editable source/terminal tabs без вмешательства в mappings, LSP и
+- независимая Vigit session для каждого Git worktree в одном workspace tab;
+- обычные editable source buffers и terminal splits без вмешательства в mappings, LSP и
   jumplist пользователя;
 - tracked `.vigit/comments.md` с anchors, ответами агента и checkbox status;
 - worktree picker с dirty/ahead/behind/no-upstream состояниями и безопасным
@@ -72,21 +72,21 @@ session. Дополнительные команды: `:VigitWorktrees`, `:Vigit
 
 ## Модель worktree и editor
 
-Vigit создаёт один принадлежащий ему review tab на canonical worktree. Внутри
-находятся только read-only diff/changes buffers. Повторный `:Vigit` фокусирует
-существующую session.
+Vigit использует текущий native tab как workspace и показывает review поверх
+обычного editor layout двумя float windows. Для каждого canonical worktree
+сохраняется независимая session, но видима и помечена `ACTIVE` только одна.
+Переключение worktree не создаёт Neovim tabs.
 
-`e`, `gd` и `T` передают управление обычным пользовательским tab:
+`e`, `gd` и `T` передают управление обычным пользовательским buffers:
 
-- `e` открывает или переиспользует source tab данного worktree;
+- `e` открывает source file в editor window текущего workspace;
 - `gd` открывает source position и вызывает стандартный LSP definition;
-- `T` открывает terminal с cwd в активном worktree.
+- `T` открывает terminal split с cwd в активном worktree.
 
 Vigit не добавляет в эти buffers собственные `Q`, options, autocmds или
-mappings. Переключайтесь обратно стандартными командами Neovim: `gt`, `gT`,
-`:tabnext`, `:tabprevious` или через свою tabline. Поэтому Telescope, LSP,
-WhichKey, jumplist (`Ctrl-o`/`Ctrl-i`) и пользовательские mappings работают как
-обычно.
+mappings. Повторный `:Vigit` возвращает review на прежнюю строку diff, а `q`
+скрывает review и возвращает code mode. Telescope, LSP, WhichKey, jumplist
+(`Ctrl-o`/`Ctrl-i`) и пользовательские mappings работают как обычно.
 
 ## Основные клавиши
 
@@ -112,7 +112,7 @@ WhichKey, jumplist (`Ctrl-o`/`Ctrl-i`) и пользовательские mappi
 | `W` | Открыть worktree picker |
 | `r` | Обновить Git state |
 | `?` | Context-aware help |
-| `q` | Закрыть текущий Vigit UI |
+| `q` | Скрыть review и вернуться в code mode |
 
 Полная generated reference: [docs/keymaps.md](docs/keymaps.md).
 
@@ -162,8 +162,8 @@ commit, push и не удаляет worktree без отдельного зап�
 - в worktree нет загруженных source buffers;
 - повторный preflight после `y` дал тот же безопасный результат.
 
-Vigit закрывает только принадлежащую ему session, сохраняет Git branch и не
-закрывает пользовательские source/terminal tabs.
+Vigit удаляет только неактивную cached session, сохраняет Git branch и не
+закрывает пользовательские source buffers или terminal splits.
 
 ## Быстрое демо
 

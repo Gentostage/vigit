@@ -14,7 +14,7 @@ local expected_commands = {
 
 local function close_session(session)
   if session and not session.closed then
-    controller.dispatch(session, "close")
+    controller.dispatch(session, "abandon")
   end
 end
 

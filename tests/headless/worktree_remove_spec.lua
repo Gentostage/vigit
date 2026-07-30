@@ -78,7 +78,7 @@ it("picker blocks removing its own linked worktree before confirmation", functio
   end, debug.traceback)
 
   if picker and not picker.closed then picker:close() end
-  if session and not session.closed then controller.dispatch(session, "close") end
+  if session and not session.closed then controller.dispatch(session, "abandon") end
   vim.fn.delete(linked, "rf")
   repo:cleanup()
   if not ok then error(message, 0) end
@@ -107,7 +107,7 @@ it("d закрывает только Vigit-сессию удалённого wo
 
     root_session = assert(v2.open({ cwd = repo.root }))
     linked_session = assert(v2.open({ cwd = linked }))
-    vim.api.nvim_set_current_tabpage(root_session.owned.tab)
+    assert_equal(assert(v2.open({ cwd = repo.root })), root_session)
     picker = assert(v2.worktrees({ session = root_session }))
     assert_truthy(vim.wait(2000, function()
       local target_path = vim.uv.fs_realpath(linked)
@@ -131,8 +131,8 @@ it("d закрывает только Vigit-сессию удалённого wo
   end, debug.traceback)
 
   if picker and not picker.closed then picker:close() end
-  if linked_session and not linked_session.closed then controller.dispatch(linked_session, "close") end
-  if root_session and not root_session.closed then controller.dispatch(root_session, "close") end
+  if linked_session and not linked_session.closed then controller.dispatch(linked_session, "abandon") end
+  if root_session and not root_session.closed then controller.dispatch(root_session, "abandon") end
   vim.fn.delete(linked, "rf")
   vim.fn.delete(remote, "rf")
   repo:cleanup()

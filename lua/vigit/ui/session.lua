@@ -47,6 +47,10 @@ function M.new(opts)
       active = false,
       queue = {},
     },
+    resources = {
+      source_buffers = {},
+      terminal = nil,
+    },
     busy = {},
     errors = {
       status = nil,

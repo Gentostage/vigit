@@ -8,7 +8,7 @@ local v2 = require("vigit.v2")
 
 local function close_session(session)
   if session and not session.closed then
-    controller.dispatch(session, "close")
+    controller.dispatch(session, "abandon")
   end
 end
 
@@ -51,6 +51,7 @@ local function find_change(session, relative_path)
 end
 
 local function focus_source_row(session, relative_path, needle, column)
+  assert_equal(assert(v2.open({ cwd = session.root })), session)
   assert_truthy(vim.wait(2000, function()
     return session.data.status ~= nil and session.busy.status == nil
   end, 10))
@@ -108,7 +109,7 @@ local function vigit_lsp_attach_count(buffer)
   return count
 end
 
-it("hands identical relative paths to distinct reusable source tabs per root", function()
+it("hands identical relative paths to distinct buffers in one workspace tab", function()
   local repo_a = Fixture.new()
   local repo_b = Fixture.new()
   local sessions = {}
@@ -167,7 +168,7 @@ it("hands identical relative paths to distinct reusable source tabs per root", f
     source_tabs[#source_tabs + 1] = tab_b
     source_buffers[#source_buffers + 1] = buf_b
 
-    assert_truthy(tab_a ~= tab_b)
+    assert_equal(tab_a, tab_b)
     assert_truthy(buf_a ~= buf_b)
     assert_equal(vim.bo[buf_a].buflisted, true)
     assert_equal(vim.bo[buf_b].buflisted, true)
@@ -182,23 +183,23 @@ it("hands identical relative paths to distinct reusable source tabs per root", f
     local cursor_b = vim.api.nvim_win_get_cursor(vim.api.nvim_get_current_win())
     assert_equal(cursor_b[1], target_b.source_line)
     assert_equal(cursor_b[2], 3)
-    assert_equal(tab_var(tab_a, "vigit_root"), session_a.root)
-    assert_equal(tab_var(tab_b, "vigit_root"), session_b.root)
-    assert_equal(tab_var(tab_a, "vigit_branch"), session_a.branch)
+    assert_equal(tab_var(tab_a, "vigit_root"), session_b.root)
     assert_equal(tab_var(tab_b, "vigit_branch"), session_b.branch)
-    assert_equal(tab_var(tab_a, "vigit_role"), "source")
-    assert_equal(tab_var(tab_b, "vigit_role"), "source")
-    assert_equal(tab_cwd(tab_a), session_a.root)
+    assert_equal(tab_var(tab_a, "vigit_role"), "workspace")
+    assert_equal(tab_var(tab_b, "vigit_role"), "workspace")
     assert_equal(tab_cwd(tab_b), session_b.root)
     assert_equal(vim.fn.getcwd(-1, -1), original_cwd)
-    assert_truthy(tab_var(tab_a, "vigit_label"):find("service.py", 1, true))
     assert_truthy(tab_var(tab_b, "vigit_label"):find("service.py", 1, true))
-    assert_equal(neovim.find_source_tab(session_a.root), tab_a)
-    assert_equal(neovim.find_source_tab(session_b.root), tab_b)
-    assert_truthy(session_a.owned.tab ~= tab_a)
-    assert_truthy(session_b.owned.tab ~= tab_b)
+    assert_equal(session_a.owned.tab, tab_a)
+    assert_equal(session_b.owned.tab, tab_b)
     assert_equal(session_a.owned.source_tab, nil)
     assert_equal(session_b.owned.source_tab, nil)
+    assert_equal(session_a.resources.source_buffers[buf_a], (
+      assert(vim.uv.fs_realpath(repo_a.root .. "/src/service.py"))
+    ))
+    assert_equal(session_b.resources.source_buffers[buf_b], (
+      assert(vim.uv.fs_realpath(repo_b.root .. "/src/service.py"))
+    ))
 
     local target_other = focus_source_row(
       session_a,
@@ -217,12 +218,12 @@ it("hands identical relative paths to distinct reusable source tabs per root", f
       assert(vim.uv.fs_realpath(repo_a.root .. "/src/other.py"))
     )
     assert_equal(tab_var(tab_a, "vigit_root"), session_a.root)
-    assert_equal(tab_var(tab_a, "vigit_role"), "source")
+    assert_equal(tab_var(tab_a, "vigit_role"), "workspace")
     assert_equal(tab_cwd(tab_a), session_a.root)
     assert_truthy(tab_var(tab_a, "vigit_label"):find("other.py", 1, true))
     local previous_source = vim.api.nvim_buf_get_mark(buf_a, "'")
     assert_equal(previous_source[1], target_a.source_line)
-    assert_equal(previous_source[2], 4)
+    assert_equal(previous_source[2], 3)
 
     local unloaded = vim.fn.bufadd(repo_a.root .. "/src/unloaded.py")
     local nofile = vim.api.nvim_create_buf(false, true)
@@ -240,7 +241,7 @@ it("hands identical relative paths to distinct reusable source tabs per root", f
     )))
 
     controller.dispatch(session_a, "close")
-    assert_equal(session_a.closed, true)
+    assert_equal(session_a.closed, false)
     assert_equal(vim.api.nvim_tabpage_is_valid(tab_a), true)
     assert_equal(vim.api.nvim_tabpage_is_valid(tab_b), true)
     assert_equal(vim.api.nvim_buf_is_valid(buf_a), true)
@@ -253,9 +254,6 @@ it("hands identical relative paths to distinct reusable source tabs per root", f
 
   for _, session in ipairs(sessions) do
     close_session(session)
-  end
-  for _, tab in ipairs(source_tabs) do
-    close_tab(tab)
   end
   for _, buffer in ipairs(source_buffers) do
     delete_buffer(buffer)
@@ -543,7 +541,7 @@ it("ignores open-file completion after the session closes", function()
     assert_truthy(callback)
     local previous_error = session.error
     local previous_handler_error = session.errors.handler
-    controller.dispatch(session, "close")
+    controller.dispatch(session, "abandon")
     renderer.render = function(...)
       renders = renders + 1
       return original_render(...)
@@ -587,6 +585,7 @@ it("accepts only the latest open-file completion exactly once", function()
     session = assert(v2.open({ cwd = repo.root }))
     focus_source_row(session, "src/service.py", "new", 0)
     controller.dispatch(session, "open_file")
+    focus_source_row(session, "src/service.py", "new", 0)
     controller.dispatch(session, "open_file")
     assert_equal(#callbacks, 2)
 
@@ -1044,7 +1043,7 @@ it("returns lsp_unavailable without moving off the source anchor", function()
   end
 end)
 
-it("opens a user-owned terminal tab rooted at the current worktree", function()
+it("opens a user-owned terminal split rooted at the current worktree", function()
   local repo = Fixture.new()
   local session
   local terminal_tab
@@ -1071,10 +1070,11 @@ it("opens a user-owned terminal tab rooted at the current worktree", function()
     assert_equal(vim.bo[terminal_buffer].buftype, "terminal")
     assert_equal(tab_var(terminal_tab, "vigit_root"), session.root)
     assert_equal(tab_var(terminal_tab, "vigit_branch"), session.branch)
-    assert_equal(tab_var(terminal_tab, "vigit_role"), "terminal")
+    assert_equal(terminal_tab, session.owned.tab)
+    assert_equal(tab_var(terminal_tab, "vigit_role"), "workspace")
     assert_truthy(tab_var(terminal_tab, "vigit_label"):find("TERM", 1, true))
     assert_equal(vim.fn.getcwd(-1, -1), original_global_cwd)
-    assert_equal(vim.fn.getcwd(0, 0), original_tab_cwd)
+    assert_equal(vim.fn.getcwd(0, 0), session.root)
     for _, mapping in ipairs(vim.api.nvim_buf_get_keymap(
       terminal_buffer,
       "n"
@@ -1088,9 +1088,10 @@ it("opens a user-owned terminal tab rooted at the current worktree", function()
     end
     assert_equal(session.owned.terminal_tab, nil)
     assert_equal(session.owned.terminal_buf, nil)
+    assert_equal(session.resources.terminal.buf, terminal_buffer)
 
     controller.dispatch(session, "close")
-    assert_equal(session.closed, true)
+    assert_equal(session.closed, false)
     assert_equal(vim.api.nvim_tabpage_is_valid(terminal_tab), true)
     assert_equal(vim.api.nvim_buf_is_valid(terminal_buffer), true)
   end, debug.traceback)
@@ -1190,8 +1191,7 @@ it("cancels a superseded pending gd before the current LspAttach", function()
     source_tab = vim.api.nvim_get_current_tabpage()
     assert_equal(vigit_lsp_attach_count(source_buffer), 1)
 
-    vim.api.nvim_set_current_tabpage(session.owned.tab)
-    vim.api.nvim_set_current_win(session.owned.diff_win)
+    focus_source_row(session, "src/service.py", "value = new_value", 5)
     controller.dispatch(session, "goto_definition")
     assert_equal(vigit_lsp_attach_count(source_buffer), 1)
 
@@ -1254,11 +1254,10 @@ local function assert_disposal_cancels_pending_definition(intent)
     controller.dispatch(session, "goto_definition")
     source_tab = vim.api.nvim_get_current_tabpage()
     assert_equal(vigit_lsp_attach_count(source_buffer), 1)
-    vim.api.nvim_set_current_tabpage(review_tab)
-    vim.api.nvim_set_current_win(session.owned.diff_win)
     controller.dispatch(session, intent)
 
-    assert_equal(session.closed, true)
+    local abandoned = intent == "abandon"
+    assert_equal(session.closed, abandoned)
     assert_equal(vigit_lsp_attach_count(source_buffer), 0)
     vim.api.nvim_exec_autocmds("LspAttach", {
       buffer = source_buffer,
@@ -1283,7 +1282,7 @@ local function assert_disposal_cancels_pending_definition(intent)
   end
 end
 
-it("cancels a pending gd before closing the review session", function()
+it("cancels a pending gd when review is hidden", function()
   assert_disposal_cancels_pending_definition("close")
 end)
 
@@ -1351,7 +1350,7 @@ it("refuses LSP side effects after the source window changes buffer", function()
   end
 end)
 
-it("calls custom cancellation once on supersede and once on close", function()
+it("calls custom cancellation once on supersede and once on abandon", function()
   local repo = Fixture.new()
   local session
   local cancel_calls = 0
@@ -1385,9 +1384,10 @@ it("calls custom cancellation once on supersede and once on close", function()
     focus_source_row(session, "src/service.py", "value = new_value", 0)
 
     controller.dispatch(session, "goto_definition")
+    focus_source_row(session, "src/service.py", "value = new_value", 0)
     controller.dispatch(session, "goto_definition")
     assert_equal(cancel_calls, 1)
-    controller.dispatch(session, "close")
+    controller.dispatch(session, "abandon")
     assert_equal(cancel_calls, 2)
 
     for _, cancel in ipairs(cancel_handles) do

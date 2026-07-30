@@ -1,4 +1,11 @@
-package.path = "./lua/?.lua;./lua/?/init.lua;" .. package.path
+local project_root = vim.fn.getcwd()
+package.path = table.concat({
+  project_root .. "/lua/?.lua",
+  project_root .. "/lua/?/init.lua",
+  project_root .. "/?.lua",
+  project_root .. "/?/init.lua",
+  package.path,
+}, ";")
 
 local tests = {}
 local failed = 0
@@ -22,6 +29,7 @@ end
 local using_default_files = #arg == 0
 local files = #arg > 0 and arg or {
   "tests/headless/cutover_spec.lua",
+  "tests/headless/workspace_lifecycle_spec.lua",
   "tests/headless/sessions_spec.lua",
   "tests/headless/syntax_spec.lua",
   "tests/headless/handoff_spec.lua",
@@ -42,8 +50,8 @@ end
 assert(#tests > 0, "headless test runner loaded zero tests")
 if using_default_files then
   assert(
-    #tests == 99,
-    string.format("expected 99 default headless tests, loaded %d", #tests)
+    #tests == 107,
+    string.format("expected 107 default headless tests, loaded %d", #tests)
   )
 end
 
@@ -53,7 +61,11 @@ for _, test in ipairs(tests) do
     io.stdout:write("PASS " .. test.name .. "\n")
   else
     failed = failed + 1
-    io.stdout:write("FAIL " .. test.name .. "\n" .. message .. "\n")
+    io.stdout:write(
+      "FAIL " .. test.name .. "\n"
+        .. (type(message) == "string" and message or vim.inspect(message))
+        .. "\n"
+    )
   end
   io.stdout:flush()
 end

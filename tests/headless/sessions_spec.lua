@@ -16,7 +16,7 @@ end
 
 local function close_session(session)
   if session and not session.closed then
-    controller.dispatch(session, "close")
+    controller.dispatch(session, "abandon")
   end
 end
 
@@ -51,7 +51,7 @@ local function owned_buffer_count(session)
     if key:sub(-4) == "_buf" then
       count = count + 1
       assert_equal(vim.bo[handle].buftype, "nofile")
-      assert_equal(vim.bo[handle].bufhidden, "wipe")
+      assert_equal(vim.bo[handle].bufhidden, "hide")
       assert_equal(vim.bo[handle].swapfile, false)
       assert_equal(vim.bo[handle].modifiable, false)
     end
@@ -97,7 +97,7 @@ it("resolves root, nested and symlink paths to one canonical repository", functi
   end
 end)
 
-it("owns one isolated review tab and two nofile buffers per canonical root", function()
+it("keeps independent sessions as overlays in one workspace tab", function()
   local repo_a = Fixture.new()
   local repo_b = Fixture.new()
   local sessions = {}
@@ -109,12 +109,14 @@ it("owns one isolated review tab and two nofile buffers per canonical root", fun
 
     assert_truthy(a.id ~= b.id)
     assert_truthy(a.root ~= b.root)
+    assert_equal(a.owned.tab, b.owned.tab)
     assert_truthy(vim.api.nvim_tabpage_is_valid(a.owned.tab))
-    assert_truthy(vim.api.nvim_tabpage_is_valid(b.owned.tab))
     assert_equal(owned_buffer_count(a), 2)
     assert_equal(owned_buffer_count(b), 2)
-    assert_equal(#vim.api.nvim_tabpage_list_wins(a.owned.tab), 2)
-    assert_equal(#vim.api.nvim_tabpage_list_wins(b.owned.tab), 2)
+    assert_equal(a.owned.diff_win, nil)
+    assert_equal(a.owned.changes_win, nil)
+    assert_truthy(vim.api.nvim_win_is_valid(b.owned.diff_win))
+    assert_truthy(vim.api.nvim_win_is_valid(b.owned.changes_win))
     assert_truthy(a.owned.diff_buf ~= b.owned.diff_buf)
     assert_truthy(a.owned.changes_buf ~= b.owned.changes_buf)
 
@@ -122,7 +124,9 @@ it("owns one isolated review tab and two nofile buffers per canonical root", fun
     assert_equal(again.id, a.id)
     assert_equal(vim.api.nvim_get_current_tabpage(), a.owned.tab)
     assert_equal(vim.fn.getcwd(-1, -1), original_cwd)
-    assert_equal(vim.fn.getcwd(0, 0), original_cwd)
+    assert_equal(vim.fn.getcwd(0, 0), a.root)
+    assert_equal(b.owned.diff_win, nil)
+    assert_equal(b.owned.changes_win, nil)
 
     vim.api.nvim_set_current_win(a.owned.changes_win)
     for _, lhs in ipairs({
@@ -147,11 +151,11 @@ it("owns one isolated review tab and two nofile buffers per canonical root", fun
     end
     vim.api.nvim_feedkeys("q", "x", false)
     assert_truthy(vim.wait(1000, function()
-      return a.closed
+      return a.owned.diff_win == nil
     end, 10))
 
-    assert_equal(vim.api.nvim_tabpage_is_valid(a.owned.tab), false)
-    assert_truthy(vim.api.nvim_tabpage_is_valid(b.owned.tab))
+    assert_equal(a.closed, false)
+    assert_truthy(vim.api.nvim_tabpage_is_valid(a.owned.tab))
     assert_equal(b.closed, false)
     assert_equal(vim.fn.getcwd(-1, -1), original_cwd)
   end, debug.traceback)
@@ -216,23 +220,24 @@ it("keeps the changes sidebar compact under inherited user window options", func
   end
 end)
 
-it("disposes a session when its owned tab is closed manually", function()
+it("recreates workspace after the user closes its hosting tab", function()
   local repo = Fixture.new()
   local session
   local reopened
   local ok, message = xpcall(function()
+    vim.cmd("tabnew")
     session = assert(v2.open({ cwd = repo.root }))
     local generation = session.reads.generation
     vim.api.nvim_set_current_tabpage(session.owned.tab)
     vim.cmd("tabclose")
 
-    assert_truthy(vim.wait(1000, function()
-      return session.closed
-    end, 10))
-    assert_truthy(session.reads.generation > generation)
-    assert_equal(next(session.reads.jobs), nil)
+    assert_equal(session.closed, false)
+    assert_equal(v2.active_session(), nil)
 
     reopened = assert(v2.open({ cwd = repo.root }))
+    assert_equal(session.closed, true)
+    assert_truthy(session.reads.generation > generation)
+    assert_equal(next(session.reads.jobs), nil)
     assert_truthy(reopened.id ~= session.id)
   end, debug.traceback)
 
@@ -244,7 +249,7 @@ it("disposes a session when its owned tab is closed manually", function()
   end
 end)
 
-it("closes the remaining owned tab when either owned buffer is wiped directly", function()
+it("disposes a session when either owned Vigit buffer is wiped directly", function()
   local repo = Fixture.new()
   local session
   local owned_tab
@@ -254,16 +259,11 @@ it("closes the remaining owned tab when either owned buffer is wiped directly", 
       owned_tab = session.owned.tab
       vim.api.nvim_buf_delete(session.owned[key], { force = true })
 
-      assert_truthy(vim.wait(1000, function()
-        return session.closed and not vim.api.nvim_tabpage_is_valid(owned_tab)
-      end, 10))
+      assert_truthy(vim.wait(1000, function() return session.closed end, 10))
+      assert_truthy(vim.api.nvim_tabpage_is_valid(owned_tab))
     end
   end, debug.traceback)
 
-  if owned_tab and vim.api.nvim_tabpage_is_valid(owned_tab) then
-    vim.api.nvim_set_current_tabpage(owned_tab)
-    vim.cmd("tabclose")
-  end
   close_session(session)
   repo:cleanup()
   if not ok then
@@ -271,7 +271,7 @@ it("closes the remaining owned tab when either owned buffer is wiped directly", 
   end
 end)
 
-it("closes the last owned tab with q and cancels reads before disposal", function()
+it("q hides review and abandon cancels reads without closing the user tab", function()
   local repo = Fixture.new()
   local session
   local reopened
@@ -283,7 +283,6 @@ it("closes the last owned tab with q and cancels reads before disposal", functio
       return session.busy.status == nil
     end, 10))
     vim.api.nvim_set_current_tabpage(session.owned.tab)
-    vim.cmd("tabonly")
     owned_tab = session.owned.tab
     session.reads.jobs.probe = {
       handle = {
@@ -297,24 +296,21 @@ it("closes the last owned tab with q and cancels reads before disposal", functio
     vim.api.nvim_feedkeys("q", "x", false)
 
     assert_truthy(vim.wait(1000, function()
-      return session.closed
-        and not vim.api.nvim_tabpage_is_valid(owned_tab)
+      return session.owned.diff_win == nil
     end, 10))
+    assert_equal(session.closed, false)
+    assert_equal(cancelled, 0)
+    assert_truthy(vim.api.nvim_tabpage_is_valid(owned_tab))
+
+    controller.dispatch(session, "abandon")
+    assert_equal(session.closed, true)
     assert_equal(cancelled, 1)
-    assert_equal(#vim.api.nvim_list_tabpages(), 1)
-    assert_truthy(vim.api.nvim_get_current_tabpage() ~= owned_tab)
+    assert_truthy(vim.api.nvim_tabpage_is_valid(owned_tab))
 
     reopened = assert(v2.open({ cwd = repo.root }))
     assert_truthy(reopened.id ~= session.id)
   end, debug.traceback)
 
-  if owned_tab and vim.api.nvim_tabpage_is_valid(owned_tab) then
-    if #vim.api.nvim_list_tabpages() == 1 then
-      vim.cmd("tabnew")
-    end
-    vim.api.nvim_set_current_tabpage(owned_tab)
-    pcall(vim.cmd, "tabclose")
-  end
   close_session(reopened)
   close_session(session)
   repo:cleanup()
@@ -490,11 +486,11 @@ it("keeps changes in a toggleable overlay below eighty columns", function()
 
     vim.api.nvim_set_current_win(session.owned.changes_win)
     controller.dispatch(session, "toggle_focus")
-    assert_equal(vim.api.nvim_win_is_valid(session.owned.changes_win), false)
+    assert_equal(session.owned.changes_win, nil)
     assert_equal(vim.api.nvim_get_current_win(), session.owned.diff_win)
 
     vim.api.nvim_exec_autocmds("VimResized", {})
-    assert_equal(vim.api.nvim_win_is_valid(session.owned.changes_win), false)
+    assert_equal(session.owned.changes_win, nil)
     assert_equal(vim.api.nvim_get_current_win(), session.owned.diff_win)
 
     renderer.render(session)
@@ -512,9 +508,9 @@ it("keeps changes in a toggleable overlay below eighty columns", function()
     vim.api.nvim_exec_autocmds("VimResized", {})
     assert_truthy(vim.wait(1000, function()
       return vim.api.nvim_win_is_valid(session.owned.changes_win)
-        and vim.api.nvim_win_get_config(session.owned.changes_win).relative == ""
+        and vim.api.nvim_win_get_config(session.owned.changes_win).relative == "editor"
     end, 10))
-    assert_equal(vim.api.nvim_win_get_config(session.owned.changes_win).relative, "")
+    assert_equal(vim.api.nvim_win_get_config(session.owned.changes_win).relative, "editor")
     assert_equal(vim.api.nvim_get_current_win(), session.owned.changes_win)
 
     vim.o.columns = 79
@@ -534,7 +530,7 @@ it("keeps changes in a toggleable overlay below eighty columns", function()
   end
 end)
 
-it("resizes hidden sessions on tab enter and repeated open", function()
+it("resizes only the active session and restores a cached session on reopen", function()
   local repo_a = Fixture.new()
   local repo_b = Fixture.new()
   local sessions = {}
@@ -548,24 +544,19 @@ it("resizes hidden sessions on tab enter and repeated open", function()
     vim.o.columns = 79
     vim.api.nvim_exec_autocmds("VimResized", {})
     assert_equal(vim.api.nvim_win_get_config(b.owned.changes_win).relative, "editor")
-    assert_equal(vim.api.nvim_win_get_config(a.owned.changes_win).relative, "")
+    assert_equal(a.owned.changes_win, nil)
 
-    vim.api.nvim_set_current_tabpage(a.owned.tab)
-    assert_truthy(vim.wait(1000, function()
-      return vim.api.nvim_win_get_config(a.owned.changes_win).relative == "editor"
-    end, 10))
-
-    vim.api.nvim_set_current_tabpage(b.owned.tab)
     vim.o.columns = 100
     vim.api.nvim_exec_autocmds("VimResized", {})
-    assert_equal(vim.api.nvim_win_get_config(b.owned.changes_win).relative, "")
-    assert_equal(vim.api.nvim_win_get_config(a.owned.changes_win).relative, "editor")
+    assert_equal(vim.api.nvim_win_get_config(b.owned.changes_win).relative, "editor")
+    assert_equal(a.owned.changes_win, nil)
 
     local again = assert(v2.open({ cwd = repo_a.root }))
     assert_equal(again.id, a.id)
     assert_truthy(vim.wait(1000, function()
-      return vim.api.nvim_win_get_config(a.owned.changes_win).relative == ""
+      return vim.api.nvim_win_get_config(a.owned.changes_win).relative == "editor"
     end, 10))
+    assert_equal(b.owned.changes_win, nil)
   end, debug.traceback)
 
   vim.o.columns = original_columns

@@ -12,6 +12,7 @@ local default_files = {
   "tests/unit/anchor_spec.lua",
   "tests/unit/diff_view_spec.lua",
   "tests/unit/registry_spec.lua",
+  "tests/unit/workspace_spec.lua",
   "tests/unit/changes_spec.lua",
   "tests/unit/descriptor_path_spec.lua",
   "tests/unit/patch_spec.lua",
@@ -41,8 +42,8 @@ end
 assert(test_count > 0, "test runner loaded zero tests")
 if using_default_files then
   assert(
-    test_count == 173,
-    string.format("expected 173 default tests, loaded %d", test_count)
+    test_count == 179,
+    string.format("expected 179 default tests, loaded %d", test_count)
   )
 end
 

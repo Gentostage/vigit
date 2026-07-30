@@ -78,6 +78,29 @@ local function valid_source(source)
     and tab == source.tab
 end
 
+local function workspace_window(workspace)
+  if type(workspace) ~= "table"
+      or not workspace.tab
+      or not vim.api.nvim_tabpage_is_valid(workspace.tab) then
+    return nil
+  end
+  if workspace.code_win and vim.api.nvim_win_is_valid(workspace.code_win) then
+    local ok, tab = pcall(
+      vim.api.nvim_win_get_tabpage,
+      workspace.code_win
+    )
+    if ok and tab == workspace.tab then
+      return workspace.code_win
+    end
+  end
+  for _, window in ipairs(vim.api.nvim_tabpage_list_wins(workspace.tab)) do
+    if vim.api.nvim_win_get_config(window).relative == "" then
+      workspace.code_win = window
+      return window
+    end
+  end
+end
+
 local function close_timer(timer)
   if timer and not timer:is_closing() then
     timer:stop()
@@ -105,30 +128,6 @@ function M.find_repo_root(path)
   end
 
   return Result.ok(canonical)
-end
-
-function M.find_source_tab(root)
-  local canonical_root = canonical_path(root) or root
-  for _, tab in ipairs(vim.api.nvim_list_tabpages()) do
-    if vim.api.nvim_tabpage_is_valid(tab) then
-      local ok_root, tab_root = pcall(
-        vim.api.nvim_tabpage_get_var,
-        tab,
-        "vigit_root"
-      )
-      local ok_role, role = pcall(
-        vim.api.nvim_tabpage_get_var,
-        tab,
-        "vigit_role"
-      )
-      if ok_root
-          and ok_role
-          and tab_root == canonical_root
-          and role == "source" then
-        return tab
-      end
-    end
-  end
 end
 
 function M.loaded_source_buffers(root)
@@ -180,36 +179,110 @@ function M.loaded_source_buffers(root)
   return Result.ok(buffers)
 end
 
+local function buffer_visible_in_other_tab(buffer, workspace_tab)
+  for _, tab in ipairs(vim.api.nvim_list_tabpages()) do
+    if tab ~= workspace_tab and vim.api.nvim_tabpage_is_valid(tab) then
+      for _, window in ipairs(vim.api.nvim_tabpage_list_wins(tab)) do
+        if vim.api.nvim_win_is_valid(window)
+            and vim.api.nvim_win_get_buf(window) == buffer then
+          return true
+        end
+      end
+    end
+  end
+  return false
+end
+
+local function running_job(job)
+  if type(job) ~= "number" or job <= 0 then
+    return false
+  end
+  local ok, statuses = pcall(vim.fn.jobwait, { job }, 0)
+  return ok and statuses[1] == -1
+end
+
+function M.inspect_workspace(workspace)
+  if type(workspace) ~= "table" then
+    return Result.err(
+      "workspace_unavailable",
+      "Workspace resources are unavailable"
+    )
+  end
+
+  local session = type(workspace.active_session) == "function"
+      and workspace:active_session()
+    or workspace.session
+  local resources = session and session.resources or {}
+  local modified = {}
+  local external = {}
+  for buffer, path in pairs(resources.source_buffers or {}) do
+    if vim.api.nvim_buf_is_valid(buffer)
+        and vim.api.nvim_buf_is_loaded(buffer) then
+      if vim.bo[buffer].modified then
+        modified[#modified + 1] = path
+      elseif buffer_visible_in_other_tab(buffer, workspace.tab) then
+        external[#external + 1] = path
+      end
+    end
+  end
+  table.sort(modified)
+  table.sort(external)
+
+  if #modified > 0 then
+    return Result.err(
+      "modified_source_buffers",
+      "Save modified files before switching worktree",
+      modified
+    )
+  end
+  if #external > 0 then
+    return Result.err(
+      "source_buffer_in_external_tab",
+      "Close source windows outside the workspace tab before switching",
+      external
+    )
+  end
+  if resources.terminal and running_job(resources.terminal.job) then
+    return Result.err(
+      "running_terminal",
+      "Exit the workspace terminal before switching worktree"
+    )
+  end
+  return Result.ok(true)
+end
+
 function M.open_file(context, done)
   local result
   local ok, message = xpcall(function()
+    local workspace = context.workspace
+    local window = workspace_window(workspace)
+    if not window then
+      error("Vigit workspace is unavailable")
+    end
+    local tab = workspace.tab
     local buffer = vim.fn.bufadd(context.path)
     vim.fn.bufload(buffer)
     vim.bo[buffer].buflisted = true
 
-    local tab = M.find_source_tab(context.root)
-    local reused = tab ~= nil
-    if not tab then
-      vim.cmd("tabnew")
-      tab = vim.api.nvim_get_current_tabpage()
-    else
-      vim.api.nvim_set_current_tabpage(tab)
-    end
-
-    local window = vim.api.nvim_get_current_win()
+    vim.api.nvim_set_current_tabpage(tab)
+    vim.api.nvim_set_current_win(window)
     vim.api.nvim_win_call(window, function()
-      vim.cmd("tcd " .. vim.fn.fnameescape(context.root))
+      vim.cmd("normal! m'")
     end)
-    if reused then
-      vim.api.nvim_win_call(window, function()
-        vim.cmd("normal! m'")
-      end)
+    local resources = context.resources
+    if resources then
+      resources.source_buffers = resources.source_buffers or {}
+      resources.source_buffers[buffer] = context.path
     end
 
     vim.api.nvim_tabpage_set_var(tab, "vigit_root", context.root)
     vim.api.nvim_tabpage_set_var(tab, "vigit_branch", context.branch or "")
     vim.api.nvim_tabpage_set_var(tab, "vigit_label", source_label(context))
-    vim.api.nvim_tabpage_set_var(tab, "vigit_role", "source")
+    vim.api.nvim_tabpage_set_var(
+      tab,
+      "vigit_role",
+      "workspace"
+    )
     vim.api.nvim_win_set_buf(window, buffer)
     vim.api.nvim_win_set_cursor(window, { context.line, context.column })
     result = Result.ok({
@@ -400,22 +473,41 @@ end
 function M.open_terminal(context, done)
   local result
   local tab
+  local window
   local buffer
+  local workspace = context.workspace
+  local resources = context.resources
   local ok, message = xpcall(function()
-    vim.cmd("tabnew")
-    tab = vim.api.nvim_get_current_tabpage()
-    local window = vim.api.nvim_get_current_win()
+    local code_window = workspace_window(workspace)
+    if not code_window or type(resources) ~= "table" then
+      error("Vigit workspace is unavailable")
+    end
+    tab = workspace.tab
+    vim.api.nvim_set_current_tabpage(tab)
+    vim.api.nvim_set_current_win(code_window)
+    vim.cmd("botright new")
+    window = vim.api.nvim_get_current_win()
     buffer = vim.api.nvim_get_current_buf()
 
     vim.api.nvim_tabpage_set_var(tab, "vigit_root", context.root)
     vim.api.nvim_tabpage_set_var(tab, "vigit_branch", context.branch or "")
     vim.api.nvim_tabpage_set_var(tab, "vigit_label", terminal_label(context))
-    vim.api.nvim_tabpage_set_var(tab, "vigit_role", "terminal")
+    vim.api.nvim_tabpage_set_var(
+      tab,
+      "vigit_role",
+      "workspace"
+    )
 
     local job = vim.fn.termopen(vim.o.shell, { cwd = context.root })
     if type(job) ~= "number" or job <= 0 then
       error("termopen returned invalid job id: " .. vim.inspect(job))
     end
+    resources.terminal = {
+      tab = tab,
+      win = window,
+      buf = buffer,
+      job = job,
+    }
     result = Result.ok({
       tab = tab,
       win = window,
@@ -425,12 +517,8 @@ function M.open_terminal(context, done)
   end, debug.traceback)
 
   if not ok then
-    if tab and vim.api.nvim_tabpage_is_valid(tab) then
-      if #vim.api.nvim_list_tabpages() == 1 then
-        vim.cmd("tabnew")
-      end
-      vim.api.nvim_set_current_tabpage(tab)
-      pcall(vim.cmd, "tabclose")
+    if window and vim.api.nvim_win_is_valid(window) then
+      pcall(vim.api.nvim_win_close, window, true)
     end
     if buffer and vim.api.nvim_buf_is_valid(buffer) then
       pcall(vim.api.nvim_buf_delete, buffer, { force = true })

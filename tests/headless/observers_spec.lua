@@ -2,7 +2,7 @@ local Fixture = require("tests.fixtures.git_repo")
 local controller = require("vigit.ui.controller")
 
 local function close_session(session)
-  if session and not session.closed then controller.dispatch(session, "close") end
+  if session and not session.closed then controller.dispatch(session, "abandon") end
 end
 
 local function wait_idle(session)
@@ -11,7 +11,7 @@ local function wait_idle(session)
   end, 10))
 end
 
-it("installs one observer group without touching source state and refreshes only live matches", function()
+it("installs one observer group without touching source state and refreshes only the active match", function()
   local repo = Fixture.new()
   local other_repo = Fixture.new()
   local session, other_session
@@ -25,6 +25,7 @@ it("installs one observer group without touching source state and refreshes only
 
     session = assert(require("vigit.v2").open({ cwd = repo.root }))
     other_session = assert(require("vigit.v2").open({ cwd = other_repo.root }))
+    assert_equal(assert(require("vigit.v2").open({ cwd = repo.root })), session)
     wait_idle(session)
     wait_idle(other_session)
     vim.api.nvim_buf_set_name(source, repo.root .. "/changed.lua")
@@ -87,7 +88,7 @@ it("installs one observer group without touching source state and refreshes only
     assert_equal(session.reads.generation, before + 1)
 
     vim.api.nvim_exec_autocmds("BufWritePost", { buffer = source })
-    controller.dispatch(session, "close")
+    controller.dispatch(session, "abandon")
     local after_close = session.reads.generation
     vim.wait(100)
     assert_equal(session.reads.generation, after_close)

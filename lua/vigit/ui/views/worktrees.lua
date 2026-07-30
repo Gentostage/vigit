@@ -107,7 +107,7 @@ local function status(row, maximum)
     parts[#parts + 1] = "!" .. row.error.code
   end
   if row.loading and not row.probes then parts[#parts + 1] = "loading" end
-  if row.open then parts[#parts + 1] = "OPEN" end
+  if row.active then parts[#parts + 1] = "ACTIVE" end
   return maximum and shorten(table.concat(parts, " · "), maximum) or table.concat(parts, " · ")
 end
 

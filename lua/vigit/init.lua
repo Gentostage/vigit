@@ -4,8 +4,10 @@ local Git = require("vigit.adapters.git_cli")
 local neovim = require("vigit.adapters.neovim")
 local Changes = require("vigit.application.changes")
 local Reviews = require("vigit.application.reviews")
+local Workspace = require("vigit.application.workspace")
 local Worktrees = require("vigit.application.worktrees")
 local config = require("vigit.config")
+local Result = require("vigit.core.result")
 local controller = require("vigit.ui.controller")
 local keymaps = require("vigit.ui.keymaps")
 local layout = require("vigit.ui.layout")
@@ -25,6 +27,7 @@ end)
 local git = Git.new(process)
 local changes
 local worktrees
+local workspace
 local reconciled_generation = setmetatable({}, { __mode = "k" })
 local pending_refreshes = setmetatable({}, { __mode = "k" })
 
@@ -79,8 +82,9 @@ function M.setup_observers()
       if not config.get().refresh.on_write then return end
       local path = vim.api.nvim_buf_get_name(args.buf)
       if path == "" or path:match("^%a+://") then return end
-      for _, session in ipairs(registry:all()) do
-        if not session.closed and belongs_to(session.root, path) then request_refresh(session) end
+      local session = workspace and workspace:active_session()
+      if session and not session.closed and belongs_to(session.root, path) then
+        request_refresh(session)
       end
     end,
     desc = "Refresh Vigit sessions after source writes",
@@ -90,8 +94,9 @@ function M.setup_observers()
     callback = function()
       if not config.get().refresh.on_tab_enter then return end
       local tab = vim.api.nvim_get_current_tabpage()
-      for _, session in ipairs(registry:all()) do
-        if not session.closed and session.owned.tab == tab then request_refresh(session) end
+      local session = workspace and workspace:active_session()
+      if session and not session.closed and session.owned.tab == tab then
+        request_refresh(session)
       end
     end,
     desc = "Refresh the entered Vigit tab",
@@ -168,17 +173,6 @@ local function current_path()
   return vim.uv.cwd()
 end
 
-local function focus_existing(session)
-  if session.closed
-      or not session.owned.tab
-      or not vim.api.nvim_tabpage_is_valid(session.owned.tab) then
-    return false
-  end
-  vim.api.nvim_set_current_tabpage(session.owned.tab)
-  controller.dispatch(session, "resize")
-  return true
-end
-
 local function worktree_root(path, callback)
   vim.schedule(function()
     callback(neovim.find_repo_root(path))
@@ -191,18 +185,152 @@ worktrees = Worktrees.new({
   registry = registry,
   neovim = {
     canonical_root = worktree_root,
-    focus_session = focus_existing,
     loaded_source_buffers = neovim.loaded_source_buffers,
     platform = package.config:sub(1, 1) == "\\" and "win32" or "posix",
   },
   concurrency = 4,
-  open_session = function(root)
-    return M.open({ cwd = root })
+  switch_session = function(root)
+    local session, open_error = M.open({ cwd = root })
+    if session then
+      return Result.ok(session)
+    end
+    return Result.err(
+      (open_error and open_error.code) or "worktree_missing",
+      (open_error and open_error.message) or "Worktree no longer exists",
+      open_error
+    )
+  end,
+  active_root = function()
+    return workspace and workspace.root or nil
   end,
   close_session = function(session)
-    controller.dispatch(session, "close")
+    if workspace then
+      workspace:remove_session(session.root)
+    end
   end,
 })
+
+local function normal_window(tab)
+  for _, window in ipairs(vim.api.nvim_tabpage_list_wins(tab)) do
+    if vim.api.nvim_win_get_config(window).relative == "" then
+      return window
+    end
+  end
+  return vim.api.nvim_tabpage_get_win(tab)
+end
+
+local function set_workspace_root(tab, root)
+  local ok, message = xpcall(function()
+    if not tab or not vim.api.nvim_tabpage_is_valid(tab) then
+      error("workspace tab is unavailable")
+    end
+    vim.api.nvim_set_current_tabpage(tab)
+    local window = normal_window(tab)
+    vim.api.nvim_win_call(window, function()
+      vim.cmd("tcd " .. vim.fn.fnameescape(root))
+    end)
+    vim.api.nvim_tabpage_set_var(tab, "vigit_root", root)
+    vim.api.nvim_tabpage_set_var(tab, "vigit_role", "workspace")
+  end, debug.traceback)
+  if not ok then
+    return Result.err(
+      "workspace_root_failed",
+      "Unable to set workspace root",
+      message
+    )
+  end
+  return Result.ok(root)
+end
+
+local function create_session(root, snapshot)
+  next_id = next_id + 1
+  local session = Session.new({
+    id = "vigit-" .. next_id,
+    root = root,
+  })
+  session.review_service = Reviews.new({
+    relative_path = config.get().review.path,
+  })
+  session.view.changes_mode = config.get().ui.changes_mode
+  for key, value in pairs(snapshot or {}) do
+    session.view[key] = value
+  end
+
+  local comments = session.review_service:load(session)
+  if not comments.ok then
+    session.errors.comments = comments.error
+    session.error = comments.error
+    log_session_error(session)
+  end
+  return Result.ok(session)
+end
+
+local function dispose_session(session)
+  renderer.clear(session)
+  layout.dispose(session)
+  registry:remove(session.id)
+end
+
+local function mount_session(session, active)
+  session.workspace = active
+  registry:put(session)
+  local ok, open_error = xpcall(function()
+    layout.show(session, active)
+    keymaps.apply(session)
+    renderer.render(session)
+    changes:refresh(session)
+  end, debug.traceback)
+  if not ok then
+    return Result.err(
+      "ui_open_failed",
+      "Unable to open Vigit review UI",
+      open_error
+    )
+  end
+  return Result.ok(session)
+end
+
+local function ensure_workspace()
+  if workspace
+      and workspace.tab
+      and vim.api.nvim_tabpage_is_valid(workspace.tab) then
+    return workspace
+  end
+  if workspace then
+    workspace:close()
+  end
+
+  local tab = vim.api.nvim_get_current_tabpage()
+  workspace = Workspace.new({
+    canonicalize = function(path)
+      return path
+    end,
+    inspect = neovim.inspect_workspace,
+    set_root = set_workspace_root,
+    create_session = create_session,
+    mount = mount_session,
+    show = function(session, active)
+      local ok, message = xpcall(function()
+        vim.api.nvim_set_current_tabpage(active.tab)
+        layout.show(session, active)
+        renderer.render(session)
+      end, debug.traceback)
+      if not ok then
+        return Result.err(
+          "ui_open_failed",
+          "Unable to show Vigit review UI",
+          message
+        )
+      end
+      return Result.ok(session)
+    end,
+    hide = layout.hide,
+    dispose = dispose_session,
+    tab = tab,
+    code_win = normal_window(tab),
+  })
+  return workspace
+end
 
 function M.open(opts)
   opts = opts or {}
@@ -212,61 +340,23 @@ function M.open(opts)
     return nil, root_result.error
   end
 
-  local root = root_result.value
-  local existing = registry:get(root)
-  if existing and focus_existing(existing) then
-    return existing
+  local active = ensure_workspace()
+  local opened = active:open(root_result.value)
+  if not opened.ok then
+    log.push(opened.error)
+    return nil, opened.error
   end
-  if existing then
-    registry:remove(existing.id)
-  end
-
-  next_id = next_id + 1
-  local session = Session.new({
-    id = "vigit-" .. next_id,
-    root = root,
-  })
-  session.review_service = Reviews.new({ relative_path = config.get().review.path })
-  session.view.changes_mode = config.get().ui.changes_mode
-  registry:put(session)
-
-  local ok, open_error = pcall(layout.open, session)
-  if not ok then
-    renderer.clear(session)
-    pcall(layout.close, session)
-    session.closed = true
-    registry:remove(session.id)
-    log.push({
-      session_id = session.id,
-      code = "ui_open_failed",
-      message = "Unable to open Vigit review UI",
-      details = open_error,
-    })
-    return nil, {
-      code = "ui_open_failed",
-      message = "Unable to open Vigit review UI",
-      details = open_error,
-      retryable = false,
-    }
-  end
-
-  keymaps.apply(session)
-  local comments = session.review_service:load(session)
-  if not comments.ok then
-    session.errors.comments = comments.error
-    session.error = comments.error
-    log_session_error(session)
-  end
-  renderer.render(session)
-  changes:refresh(session)
-  return session
+  return opened.value
 end
 
 function M.active_session()
-  local current = vim.api.nvim_get_current_tabpage()
-  for _, session in ipairs(registry:all()) do
-    if not session.closed and session.owned.tab == current then return session end
+  if not workspace
+      or not workspace.tab
+      or not vim.api.nvim_tabpage_is_valid(workspace.tab)
+      or vim.api.nvim_get_current_tabpage() ~= workspace.tab then
+    return nil
   end
+  return workspace:active_session()
 end
 
 function M.worktrees(opts)

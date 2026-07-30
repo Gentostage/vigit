@@ -225,40 +225,27 @@ it("старый list cancel не отменяет более новое пок�
   assert_equal(app.request, nil)
 end)
 
-it("открывает одну Vigit-сессию на канонический root и фокусирует существующую", function()
+it("переключает active Vigit-сессию по каноническому root", function()
   local Worktrees = require("vigit.application.worktrees")
-  local first = { id = "first", root = "/repo/a", closed = false }
-  local registry = {
-    get = function(_, root)
-      return root == "/repo/a" and first or nil
-    end,
-  }
-  local focused = 0
-  local opened = 0
+  local switched = {}
+  local session = { id = "first", root = "/repo/a", closed = false }
   local app = Worktrees.new({
     git = fake_git({}),
-    registry = registry,
     neovim = {
       canonical_root = function(path, callback)
         callback(Result.ok(path:gsub("/$", "")))
       end,
-      focus_session = function(value)
-        assert_equal(value, first)
-        focused = focused + 1
-        return true
-      end,
     },
-    open_session = function(root)
-      opened = opened + 1
-      return { id = "new", root = root }
+    switch_session = function(root)
+      switched[#switched + 1] = root
+      return Result.ok(session)
     end,
   })
   local result
 
   app:open({ path = "/repo/a/" }, function(value) result = value end)
-  assert_equal(result.value, first)
-  assert_equal(focused, 1)
-  assert_equal(opened, 0)
+  assert_equal(result.value, session)
+  assert_equal(switched, { "/repo/a" })
 end)
 
 it("оставляет picker доступным, если worktree исчез до открытия", function()
@@ -280,7 +267,7 @@ end)
 
 it("отклоняет resolved root, который не совпадает с выбранным worktree", function()
   local Worktrees = require("vigit.application.worktrees")
-  local opened = 0
+  local switched = 0
   local app = Worktrees.new({
     git = fake_git({}),
     neovim = {
@@ -289,23 +276,23 @@ it("отклоняет resolved root, который не совпадает с 
         return { cancel = function() end }
       end,
     },
-    open_session = function()
-      opened = opened + 1
-      return { id = "unexpected" }
+    switch_session = function()
+      switched = switched + 1
+      return Result.ok({ id = "unexpected" })
     end,
   })
   local result
 
   app:open({ path = "/repo/removed-linked" }, function(value) result = value end)
   assert_equal(result.error.code, "worktree_missing")
-  assert_equal(opened, 0)
+  assert_equal(switched, 0)
 end)
 
-it("отменяет pending open до resolver callback и не открывает session", function()
+it("отменяет pending open до resolver callback и не переключает session", function()
   local Worktrees = require("vigit.application.worktrees")
   local resolver_callback
   local resolver_cancelled = false
-  local opened = 0
+  local switched = 0
   local callback_count = 0
   local app = Worktrees.new({
     git = fake_git({}),
@@ -315,9 +302,9 @@ it("отменяет pending open до resolver callback и не открыва�
         return { cancel = function() resolver_cancelled = true end }
       end,
     },
-    open_session = function()
-      opened = opened + 1
-      return { id = "unexpected" }
+    switch_session = function()
+      switched = switched + 1
+      return Result.ok({ id = "unexpected" })
     end,
   })
 
@@ -326,7 +313,7 @@ it("отменяет pending open до resolver callback и не открыва�
   resolver_callback(Result.ok("/repo/wt"))
 
   assert_equal(resolver_cancelled, true)
-  assert_equal(opened, 0)
+  assert_equal(switched, 0)
   assert_equal(callback_count, 0)
 end)
 
@@ -383,7 +370,7 @@ end)
 
 it("сравнивает Windows worktree roots без учёта регистра и разделителя", function()
   local Worktrees = require("vigit.application.worktrees")
-  local opened = 0
+  local switched = 0
   local app = Worktrees.new({
     git = fake_git({}),
     neovim = {
@@ -393,17 +380,17 @@ it("сравнивает Windows worktree roots без учёта регистр
         return { cancel = function() end }
       end,
     },
-    open_session = function(root)
-      opened = opened + 1
+    switch_session = function(root)
+      switched = switched + 1
       assert_equal(root, "C:\\Repo\\Feature\\")
-      return { root = root }
+      return Result.ok({ root = root })
     end,
   })
   local result
 
   app:open({ path = "c:/repo/feature" }, function(value) result = value end)
   assert_equal(result.ok, true)
-  assert_equal(opened, 1)
+  assert_equal(switched, 1)
 end)
 
 it("не ослабляет POSIX-сравнение worktree roots", function()

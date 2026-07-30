@@ -7,7 +7,7 @@ local Reviews = require("vigit.application.reviews")
 local Result = require("vigit.core.result")
 
 local function close(session)
-  if session and not session.closed then controller.dispatch(session, "close") end
+  if session and not session.closed then controller.dispatch(session, "abandon") end
 end
 
 local function changed_row(session)
@@ -294,7 +294,8 @@ it("keeps comment documents isolated across two live Vigit roots", function()
   local ok, message = xpcall(function()
     first = assert(v2.open({ cwd = first_repo.root }))
     second = assert(v2.open({ cwd = second_repo.root }))
-    assert_truthy(first.owned.tab ~= second.owned.tab)
+    assert_equal(first.owned.tab, second.owned.tab)
+    assert_truthy(first ~= second)
     local reviews = require("vigit.application.reviews")
     assert_truthy(reviews.add(first, {
       path = "src/first.lua", line = 1, side = "new", section = "unstaged", context = "first",

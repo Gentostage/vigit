@@ -36,7 +36,7 @@ local entries = {
   { id = "comment_editor.save", modes = { "n", "i" }, lhs = "<C-s>", contexts = { "comment_editor" }, group = "comments", description = "Save comment", intent = "save_comment" },
   { id = "comment_editor.close", modes = { "n" }, lhs = "q", contexts = { "comment_editor" }, group = "lifecycle", description = "Close comment editor", intent = "close" },
   { id = "comment_editor.escape", modes = { "n" }, lhs = "<Esc>", contexts = { "comment_editor" }, group = "lifecycle", description = "Close comment editor", intent = "close" },
-  { id = "session.close", modes = { "n" }, lhs = "q", contexts = { "diff", "changes" }, group = "lifecycle", description = "Close current review", intent = "close" },
+  { id = "session.close", modes = { "n" }, lhs = "q", contexts = { "diff", "changes" }, group = "lifecycle", description = "Return to code mode", intent = "close" },
   { id = "worktrees.open", modes = { "n" }, lhs = "W", contexts = { "diff", "changes", "comments", "prompt", "comment_editor" }, group = "worktrees", description = "Open worktree picker", intent = "open_worktrees" },
   { id = "worktrees.select", modes = { "n" }, lhs = "<CR>", contexts = { "worktrees" }, group = "worktrees", description = "Open selected worktree", intent = "select_worktree" },
   { id = "worktrees.previous", modes = { "n" }, lhs = "[w", contexts = { "worktrees" }, group = "worktrees", description = "Previous worktree", intent = "previous_worktree" },
@@ -224,18 +224,14 @@ function M.apply(session)
     if not session.closed then
       vim.schedule(function()
         if session.closed then return end
-        if session.owned.tab and vim.api.nvim_tabpage_is_valid(session.owned.tab) then
-          require("vigit.ui.controller").dispatch(session, "close")
-        else
-          require("vigit.ui.controller").dispatch(session, "abandon")
-        end
+        require("vigit.ui.controller").dispatch(session, "abandon")
       end)
     end
   end
   for _, buffer in ipairs({ session.owned.diff_buf, session.owned.changes_buf }) do
     vim.api.nvim_create_autocmd("BufWipeout", {
       buffer = buffer, once = true, callback = on_owned_buffer_wipe,
-      desc = "Dispose the Vigit session with its owned tab",
+      desc = "Dispose the Vigit session with its owned buffers",
     })
   end
 end

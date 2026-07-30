@@ -733,6 +733,8 @@ local function handler_context(session)
     relative_path = relative_path,
     line = source_line or 1,
     column = source_line and cursor[2] or 0,
+    workspace = session.workspace,
+    resources = session.resources,
   })
 end
 
@@ -816,6 +818,15 @@ local function invoke_handler(
   local values = handler_context(session)
   if not values then
     return
+  end
+  if session.workspace
+      and type(session.workspace.show_code) == "function" then
+    local code_mode = session.workspace:show_code()
+    if not code_mode.ok then
+      record_error(session, code_mode.error)
+      renderer.render(session)
+      return
+    end
   end
   local configured = context.config
     and context.config.get().handlers[action]
@@ -1104,15 +1115,25 @@ function M.dispatch(session, intent)
   elseif name == "abandon" then
     refresh_requests[session] = nil
     cancel_handler_requests(session)
-    renderer.clear(session)
-    layout.abandon(session)
-    context.registry:remove(session.id)
+    if session.workspace
+        and type(session.workspace.active_session) == "function"
+        and session.workspace:active_session() == session
+        and type(session.workspace.close) == "function" then
+      session.workspace:close()
+    else
+      renderer.clear(session)
+      layout.abandon(session)
+      context.registry:remove(session.id)
+    end
   elseif name == "close" then
     refresh_requests[session] = nil
     cancel_handler_requests(session)
-    renderer.clear(session)
-    layout.close(session)
-    context.registry:remove(session.id)
+    if session.workspace
+        and type(session.workspace.show_code) == "function" then
+      session.workspace:show_code()
+    else
+      layout.close(session)
+    end
   end
 end
 

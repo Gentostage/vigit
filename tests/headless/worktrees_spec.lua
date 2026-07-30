@@ -4,7 +4,7 @@ local controller = require("vigit.ui.controller")
 
 local function close_session(session)
   if session and not session.closed then
-    controller.dispatch(session, "close")
+    controller.dispatch(session, "abandon")
   end
 end
 
@@ -27,6 +27,8 @@ it("открывает picker worktree, различает ROOT и WT и фок�
     end, 10))
     assert_equal(picker.rows[1].kind, "root")
     assert_equal(picker.rows[2].kind, "linked")
+    assert_equal(picker.rows[1].active, true)
+    assert_equal(picker.rows[2].active, false)
     for _, lhs in ipairs({ "[w", "]w", "r", "F", "d", "q" }) do
       assert_equal(vim.fn.maparg(lhs, "n", false, true).buffer, 1)
     end
@@ -42,10 +44,22 @@ it("открывает picker worktree, различает ROOT и WT и фок�
     assert_truthy(vim.wait(2000, function()
       return again.row_by_path[vim.uv.fs_realpath(linked)] ~= nil
     end, 10))
+    local active_rows = 0
+    local linked_active = false
+    for _, row in ipairs(again.rows) do
+      if row.active then
+        active_rows = active_rows + 1
+        linked_active = row.path == vim.uv.fs_realpath(linked)
+      end
+    end
+    assert_equal(active_rows, 1)
+    assert_equal(linked_active, true)
     local reopened_row = again.row_by_path[vim.uv.fs_realpath(linked)]
     vim.api.nvim_win_set_cursor(again.win, { reopened_row, 0 })
     again:select()
-    assert_equal(v2.active_session(), linked_session)
+    assert_truthy(vim.wait(2000, function()
+      return again.closed and v2.active_session() == linked_session
+    end, 10))
   end, debug.traceback)
 
   close_session(linked_session)

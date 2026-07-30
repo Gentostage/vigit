@@ -6,7 +6,7 @@ local v2 = require("vigit.v2")
 
 local function close_session(session)
   if session and not session.closed then
-    controller.dispatch(session, "close")
+    controller.dispatch(session, "abandon")
   end
 end
 
@@ -126,7 +126,7 @@ it("preserves a real line-90 byte anchor through f and native e handoff", functi
     controller.dispatch(session, "open_file")
     source_tab = vim.api.nvim_get_current_tabpage()
     source_buffer = vim.api.nvim_get_current_buf()
-    assert_truthy(source_tab ~= session.owned.tab)
+    assert_equal(source_tab, session.owned.tab)
     assert_equal(
       vim.api.nvim_buf_get_name(source_buffer),
       assert(vim.uv.fs_realpath(repo.root .. "/src/long_service.py"))
@@ -136,7 +136,7 @@ it("preserves a real line-90 byte anchor through f and native e handoff", functi
       { 90, original_column }
     ))
 
-    vim.api.nvim_set_current_tabpage(session.owned.tab)
+    assert_equal(assert(v2.open({ cwd = repo.root })), session)
     vim.api.nvim_set_current_win(session.owned.diff_win)
     local returned_cursor = vim.api.nvim_win_get_cursor(session.owned.diff_win)
     local returned_target = assert(renderer.target_at(
@@ -194,7 +194,6 @@ it("preserves a real line-90 byte anchor through f and native e handoff", functi
   end, debug.traceback)
 
   close_session(session)
-  close_tab(source_tab)
   delete_buffer(source_buffer)
   repo:cleanup()
   if not ok then
@@ -260,7 +259,6 @@ it("opens a diff_too_large file placeholder with e at line one", function()
 
   config.setup(previous_config)
   close_session(session)
-  close_tab(source_tab)
   delete_buffer(source_buffer)
   repo:cleanup()
   if not ok then
