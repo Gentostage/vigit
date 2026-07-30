@@ -270,11 +270,6 @@ function M.toggle_changes(session)
 
   if valid_window(session.owned.changes_win) then
     if vim.api.nvim_get_current_win() == session.owned.changes_win then
-      session.view.changes_overlay_visible = false
-      save_cursor(session, "changes", session.owned.changes_win)
-      close_window(session.owned.changes_win)
-      session.owned.changes_win = nil
-      M.resize(session)
       vim.api.nvim_set_current_win(session.owned.diff_win)
     else
       vim.api.nvim_set_current_win(session.owned.changes_win)
@@ -296,6 +291,25 @@ function M.toggle_changes(session)
     session.owned.changes_win,
     session.owned.changes_buf
   )
+end
+
+function M.focus_direction(session, direction)
+  if session.closed or not M.is_visible(session) then
+    return
+  end
+
+  local changes_on_left = config.get().ui.changes_side == "left"
+  local focus_changes = direction == "left" and changes_on_left
+    or direction == "right" and not changes_on_left
+  if focus_changes then
+    if not valid_window(session.owned.changes_win) then
+      M.toggle_changes(session)
+    else
+      vim.api.nvim_set_current_win(session.owned.changes_win)
+    end
+  elseif valid_window(session.owned.diff_win) then
+    vim.api.nvim_set_current_win(session.owned.diff_win)
+  end
 end
 
 local function cancel_reads(session)

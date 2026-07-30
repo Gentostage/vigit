@@ -410,6 +410,7 @@ it("deletes an untracked regular file through the rollback adapter", function(do
   local git = git_cli.new(process)
   status(git, repo.root, function(current)
     git:restore_file(repo.root, find_change(current.unstaged, "untracked.txt"), function(result)
+      assert_equal(vim.in_fast_event(), false)
       assert_truthy(result.ok)
       assert_equal(file_bytes(repo.root, "untracked.txt"), false)
       assert_clean(git, repo, "untracked.txt", done)

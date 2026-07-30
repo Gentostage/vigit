@@ -25,7 +25,8 @@ local comment_target_kinds = { add = true, context = true, delete = true }
 local open_comments
 
 local supported_intents = {
-  toggle_focus = true, activate = true, select_change = true, next_file = true,
+  toggle_focus = true, focus_left = true, focus_right = true,
+  activate = true, select_change = true, next_file = true,
   previous_file = true, next_hunk = true, previous_hunk = true,
   toggle_all_files = true, toggle_changes_mode = true, toggle_file_index = true,
   toggle_hunk_index = true, restore_hunk = true, restore_file = true,
@@ -888,12 +889,44 @@ local function select_change(session, intent)
   else
     target = cursor_target(session)
   end
-  if not target or target.kind ~= "change"
-      or target.change_id == session.view.selected_change_id then
+  if not target or target.kind ~= "change" then
+    return target
+  end
+  if target.change_id ~= session.view.selected_change_id then
+    refresh_requests[session] = nil
+    context.changes:select(session, target.change_id)
+  end
+  return target
+end
+
+local function activate(session, intent)
+  local target = cursor_target(session)
+  if type(intent) == "table" and intent.change_id then
+    target = {
+      kind = "change",
+      change_id = intent.change_id,
+    }
+  end
+  if not target then
     return
   end
-  refresh_requests[session] = nil
-  context.changes:select(session, target.change_id)
+
+  if target.kind == "directory" then
+    session.view.expanded_dirs = session.view.expanded_dirs or {}
+    local key = target.key
+      or string.format("%s\0%s", target.section or "", target.path)
+    session.view.expanded_dirs[key] = target.expanded == false
+    renderer.render(session)
+    return
+  end
+
+  if target.kind == "change" then
+    select_change(session, target)
+    if session.owned.diff_win
+        and vim.api.nvim_win_is_valid(session.owned.diff_win) then
+      vim.api.nvim_set_current_win(session.owned.diff_win)
+    end
+  end
 end
 
 local function move_file(session, delta)
@@ -969,7 +1002,11 @@ function M.dispatch(session, intent)
   if name == "toggle_focus" then
     layout.toggle_changes(session)
     renderer.render(session)
-  elseif name == "activate" or name == "select_change" then
+  elseif name == "focus_left" or name == "focus_right" then
+    layout.focus_direction(session, name == "focus_left" and "left" or "right")
+  elseif name == "activate" then
+    activate(session, intent)
+  elseif name == "select_change" then
     select_change(session, intent)
   elseif name == "next_file" then
     move_file(session, 1)

@@ -12,7 +12,9 @@ local hint_labels = {
 
 local entries = {
   { id = "view.toggle_focus", modes = { "n" }, lhs = "<Tab>", contexts = { "diff", "changes" }, group = "view", description = "Switch diff and changes", intent = "toggle_focus" },
-  { id = "change.activate", modes = { "n" }, lhs = "<CR>", contexts = { "changes" }, group = "navigation", description = "Select change", intent = "activate" },
+  { id = "view.focus_left", modes = { "n" }, lhs = "<C-w><Left>", contexts = { "diff", "changes" }, group = "view", description = "Focus left Vigit pane", intent = "focus_left", hint = false },
+  { id = "view.focus_right", modes = { "n" }, lhs = "<C-w><Right>", contexts = { "diff", "changes" }, group = "view", description = "Focus right Vigit pane", intent = "focus_right", hint = false },
+  { id = "change.activate", modes = { "n" }, lhs = "<CR>", contexts = { "changes" }, group = "navigation", description = "Open change or toggle directory", intent = "activate" },
   { id = "change.next_file", modes = { "n" }, lhs = "]f", contexts = { "diff", "changes" }, group = "navigation", description = "Select next file", intent = "next_file" },
   { id = "navigation.open_file", modes = { "n" }, lhs = "e", contexts = { "diff", "changes" }, group = "navigation", description = "Open source file", intent = "open_file" },
   { id = "navigation.goto_definition", modes = { "n" }, lhs = "gd", contexts = { "diff", "changes" }, group = "navigation", description = "Go to source definition", intent = "goto_definition" },
@@ -150,14 +152,16 @@ function M.hints(context, maximum, configured)
   local hints = {}
   maximum = maximum or math.huge
   for _, entry in ipairs(M.for_context(context, configured)) do
-    local lhs = entry.lhs == "<CR>" and "↵"
-      or entry.lhs == "<Esc>" and "Esc"
-      or entry.lhs == "<Tab>" and "Tab"
-      or entry.lhs
-    local text = lhs .. " " .. (hint_labels[entry.id] or entry.description)
-    local candidate = #hints == 0 and text or (table.concat(hints, " · ") .. " · " .. text)
-    if M.display_width(candidate) > maximum then break end
-    hints[#hints + 1] = text
+    if entry.hint ~= false then
+      local lhs = entry.lhs == "<CR>" and "↵"
+        or entry.lhs == "<Esc>" and "Esc"
+        or entry.lhs == "<Tab>" and "Tab"
+        or entry.lhs
+      local text = lhs .. " " .. (hint_labels[entry.id] or entry.description)
+      local candidate = #hints == 0 and text or (table.concat(hints, " · ") .. " · " .. text)
+      if M.display_width(candidate) > maximum then break end
+      hints[#hints + 1] = text
+    end
   end
   return table.concat(hints, " · ")
 end

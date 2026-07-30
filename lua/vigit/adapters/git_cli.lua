@@ -1166,15 +1166,25 @@ local function inspect_unborn_additions(raw, paths)
 end
 
 local function verify_restore(git, root, identities, expected, callback)
+  local function complete(result)
+    if vim.in_fast_event() then
+      vim.schedule(function()
+        callback(result)
+      end)
+    else
+      callback(result)
+    end
+  end
+
   return git:status(root, function(status_result)
     if not status_result.ok then
-      callback(status_result)
+      complete(status_result)
       return
     end
     for _, section in ipairs({ "staged", "unstaged" }) do
       for _, remaining in ipairs(status_result.value[section] or {}) do
         if has_identity(remaining, identities) then
-          callback(Result.err("restore_verification_failed", "Rollback did not remove the expected change", remaining.path))
+          complete(Result.err("restore_verification_failed", "Rollback did not remove the expected change", remaining.path))
           return
         end
       end
@@ -1184,12 +1194,12 @@ local function verify_restore(git, root, identities, expected, callback)
     local function verify_path(index)
       local item = pending[index]
       if not item then
-        callback(Result.ok(true))
+        complete(Result.ok(true))
         return
       end
       vim.uv.fs_lstat(root .. "/" .. item.path, function(_, stat)
         if (stat ~= nil) ~= item.exists then
-          callback(Result.err("restore_verification_failed", "Rollback produced unexpected path existence", item.path))
+          complete(Result.err("restore_verification_failed", "Rollback produced unexpected path existence", item.path))
         else
           verify_path(index + 1)
         end
@@ -1241,7 +1251,17 @@ function Git:restore_file(root, change, callback)
     local function complete_mutation(result)
       if cancelled then return end
       if not result.ok then callback(result); return end
-      verification_handle = verify_restore(self, root, identities, expected, callback)
+      verification_handle = verify_restore(
+        self,
+        root,
+        identities,
+        expected,
+        function(verification_result)
+          if not cancelled then
+            callback(verification_result)
+          end
+        end
+      )
     end
     if not tracked then
       operation_handle = unlink_repository_file(self, root, change.path, complete_mutation)

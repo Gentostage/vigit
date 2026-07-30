@@ -165,13 +165,31 @@ local status_groups = {
   ["?"] = "VigitChangesUntracked",
 }
 
-local function render_tree_node(output, node, depth, width, icons)
+local function directory_key(section, path)
+  return section .. "\0" .. path
+end
+
+local function render_tree_node(
+    output,
+    node,
+    depth,
+    width,
+    icons,
+    section,
+    expanded_dirs
+)
   local indent = string.rep(" ", depth)
   for _, entry in ipairs(node.entries) do
     if entry.kind == "directory" then
       local icon, group = icons.directory()
+      local key = directory_key(section, entry.path)
+      local expanded = expanded_dirs[key] ~= false
       local row = add_styled_line(output, {
         { text = indent },
+        {
+          text = expanded and "▾ " or "▸ ",
+          group = "Comment",
+        },
         {
           text = string.format(
             "%s %s/",
@@ -184,8 +202,21 @@ local function render_tree_node(output, node, depth, width, icons)
       add_target(output, row, {
         kind = "directory",
         path = entry.path,
+        section = section,
+        key = key,
+        expanded = expanded,
       })
-      render_tree_node(output, entry, depth + 1, width, icons)
+      if expanded then
+        render_tree_node(
+          output,
+          entry,
+          depth + 1,
+          width,
+          icons,
+          section,
+          expanded_dirs
+        )
+      end
     else
       local change = entry.change
       local icon, group = icons.file(entry.name, change.path)
@@ -211,8 +242,23 @@ local function render_tree_node(output, node, depth, width, icons)
   end
 end
 
-local function render_tree(output, changes, width, icons)
-  render_tree_node(output, build_tree(changes), 0, width, icons)
+local function render_tree(
+    output,
+    changes,
+    width,
+    icons,
+    section,
+    expanded_dirs
+)
+  render_tree_node(
+    output,
+    build_tree(changes),
+    0,
+    width,
+    icons,
+    section,
+    expanded_dirs
+  )
 end
 
 local function render_section(
@@ -221,7 +267,9 @@ local function render_section(
     changes,
     mode,
     width,
-    icons
+    icons,
+    section,
+    expanded_dirs
 )
   if #changes == 0 then
     return
@@ -237,7 +285,14 @@ local function render_section(
   if mode == "list" then
     render_list(output, changes, width)
   else
-    render_tree(output, changes, width, icons)
+    render_tree(
+      output,
+      changes,
+      width,
+      icons,
+      section,
+      expanded_dirs
+    )
   end
 end
 
@@ -274,14 +329,26 @@ function M.render(state, width, opts)
   end
 
   local mode = state.view and state.view.changes_mode or "tree"
-  render_section(output, "Staged", status.staged or {}, mode, width, icons)
+  local expanded_dirs = state.view and state.view.expanded_dirs or {}
+  render_section(
+    output,
+    "Staged",
+    status.staged or {},
+    mode,
+    width,
+    icons,
+    "staged",
+    expanded_dirs
+  )
   render_section(
     output,
     "Unstaged",
     status.unstaged or {},
     mode,
     width,
-    icons
+    icons,
+    "unstaged",
+    expanded_dirs
   )
 
   if #output.targets == 0 then

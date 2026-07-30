@@ -388,7 +388,8 @@ it("renders status before an explicitly selected diff and dispatches cursor sele
     end, 10))
     assert_truthy(find_line(session.owned.diff_buf, "@@"))
 
-    vim.api.nvim_set_current_win(session.owned.diff_win)
+    controller.dispatch(session, "activate")
+    assert_equal(vim.api.nvim_get_current_win(), session.owned.diff_win)
     controller.dispatch(session, "next_file")
     assert_equal(vim.api.nvim_get_current_win(), session.owned.diff_win)
     controller.dispatch(session, "previous_file")
@@ -485,17 +486,17 @@ it("keeps changes in a toggleable overlay below eighty columns", function()
     assert_truthy(config.width >= 24 and config.width <= 36)
 
     vim.api.nvim_set_current_win(session.owned.changes_win)
-    controller.dispatch(session, "toggle_focus")
-    assert_equal(session.owned.changes_win, nil)
+    vim.api.nvim_feedkeys(vim.keycode("<Tab>"), "x", false)
+    assert_truthy(vim.api.nvim_win_is_valid(session.owned.changes_win))
     assert_equal(vim.api.nvim_get_current_win(), session.owned.diff_win)
 
     vim.api.nvim_exec_autocmds("VimResized", {})
-    assert_equal(session.owned.changes_win, nil)
+    assert_truthy(vim.api.nvim_win_is_valid(session.owned.changes_win))
     assert_equal(vim.api.nvim_get_current_win(), session.owned.diff_win)
 
     renderer.render(session)
-    controller.dispatch(session, "toggle_focus")
-    assert_truthy(vim.api.nvim_win_is_valid(session.owned.changes_win))
+    vim.api.nvim_feedkeys(vim.keycode("<Tab>"), "x", false)
+    assert_equal(vim.api.nvim_get_current_win(), session.owned.changes_win)
     assert_equal(vim.api.nvim_win_get_config(session.owned.changes_win).relative, "editor")
     local target = assert(renderer.file_targets(session)[1])
     local line = buffer_lines(session.owned.changes_buf)[target.row]
@@ -511,6 +512,11 @@ it("keeps changes in a toggleable overlay below eighty columns", function()
         and vim.api.nvim_win_get_config(session.owned.changes_win).relative == "editor"
     end, 10))
     assert_equal(vim.api.nvim_win_get_config(session.owned.changes_win).relative, "editor")
+    assert_equal(vim.api.nvim_get_current_win(), session.owned.changes_win)
+
+    vim.api.nvim_feedkeys(vim.keycode("<C-w><Left>"), "x", false)
+    assert_equal(vim.api.nvim_get_current_win(), session.owned.diff_win)
+    vim.api.nvim_feedkeys(vim.keycode("<C-w><Right>"), "x", false)
     assert_equal(vim.api.nvim_get_current_win(), session.owned.changes_win)
 
     vim.o.columns = 79
@@ -673,14 +679,14 @@ it("renders every tree directory with semantic status and icon highlights", func
   local output = changes_view.render(state, 40, { icons = icons })
   assert_equal(table.concat(output.lines, "\n"), table.concat({
     "Staged (3)",
-    "D lua/",
-    " D demo/",
-    "  D features/",
-    "   D checkout/",
-    "    D presentation/",
+    "▾ D lua/",
+    " ▾ D demo/",
+    "  ▾ D features/",
+    "   ▾ D checkout/",
+    "    ▾ D presentation/",
     "     A L invoice.lua",
-    "   D orders/",
-    "    D application/",
+    "   ▾ D orders/",
+    "    ▾ D application/",
     "     M L order.lua",
     "  D L format.lua",
   }, "\n"))
@@ -706,6 +712,19 @@ it("renders every tree directory with semantic status and icon highlights", func
   )[1], "D")
   assert_equal(highlighted_text(output, "DevIconLua")[1], "L invoice.lua")
   assert_equal(#output.targets, 10)
+
+  state.view.expanded_dirs = {}
+  state.view.expanded_dirs["staged\0lua/demo/features"] = false
+  local collapsed = changes_view.render(state, 40, { icons = icons })
+  assert_truthy(table.concat(collapsed.lines, "\n"):find(
+    "  ▸ D features/",
+    1,
+    true
+  ))
+  assert_equal(
+    table.concat(collapsed.lines, "\n"):find("invoice.lua", 1, true),
+    nil
+  )
 end)
 
 it("applies hierarchical tree highlight spans to the changes buffer", function()
@@ -746,6 +765,26 @@ it("applies hierarchical tree highlight spans to the changes buffer", function()
     )
     assert_truthy(groups.VigitChangesFile.end_col
       > groups.VigitChangesFile.col)
+
+    vim.api.nvim_set_current_win(session.owned.changes_win)
+    local directory_row
+    for row = 1, vim.api.nvim_buf_line_count(session.owned.changes_buf) do
+      local target = renderer.target_at(session.owned.changes_buf, row)
+      if target and target.kind == "directory" and target.path == "src" then
+        directory_row = row
+        break
+      end
+    end
+    assert_truthy(directory_row)
+    vim.api.nvim_win_set_cursor(
+      session.owned.changes_win,
+      { directory_row, 0 }
+    )
+    controller.dispatch(session, "activate")
+    assert_equal(find_line(session.owned.changes_buf, "tracked.lua"), nil)
+    assert_equal(vim.api.nvim_get_current_win(), session.owned.changes_win)
+    controller.dispatch(session, "activate")
+    assert_truthy(find_line(session.owned.changes_buf, "tracked.lua"))
   end, debug.traceback)
 
   close_session(session)
@@ -1136,6 +1175,8 @@ end)
 it("publishes the basic normal-mode key registry", function()
   local expected = {
     "<Tab>",
+    "<C-w><Left>",
+    "<C-w><Right>",
     "<CR>",
     "]f",
     "e",
@@ -1183,7 +1224,7 @@ it("publishes the basic normal-mode key registry", function()
     assert_truthy(type(entry.id) == "string" and entry.id ~= "")
     assert_truthy(type(entry.intent) == "string" and entry.intent ~= "")
   end
-  assert_equal(keymaps.entries[9].intent, "toggle_hunk_index")
+  assert_equal(keymaps.entries[11].intent, "toggle_hunk_index")
 end)
 
 it("validates setup options after public command registration", function()
