@@ -143,6 +143,49 @@ it("переключает два worktree через одну live session в �
   end
 end)
 
+it("повторно показывает явно выбранный worktree независимо от скрытого source buffer", function()
+  local root_repo = Fixture.new()
+  local linked_repo = Fixture.new()
+  local root_session
+  local linked_session
+  local source_buffer
+
+  local ok, message = xpcall(function()
+    for _, repo in ipairs({ root_repo, linked_repo }) do
+      repo:write("src/service.py", { "value = 1" })
+      repo:git({ "add", "--", "src/service.py" })
+      repo:commit("initial")
+    end
+
+    linked_session = assert(v2.open({ cwd = linked_repo.root }))
+    controller.dispatch(linked_session, "close")
+    vim.cmd("edit " .. vim.fn.fnameescape(linked_repo.root .. "/src/service.py"))
+    source_buffer = vim.api.nvim_get_current_buf()
+
+    root_session = assert(v2.open({ cwd = root_repo.root }))
+    controller.dispatch(root_session, "close")
+    assert_equal(vim.api.nvim_get_current_buf(), source_buffer)
+
+    local reopened = assert(v2.open())
+
+    assert_equal(reopened, root_session)
+    assert_equal(v2.active_session(), root_session)
+    assert_equal(vim.fn.getcwd(0, 0), assert(vim.uv.fs_realpath(root_repo.root)))
+    assert_truthy(layout.is_visible(root_session))
+  end, debug.traceback)
+
+  close_session(root_session)
+  close_session(linked_session)
+  if source_buffer and vim.api.nvim_buf_is_valid(source_buffer) then
+    pcall(vim.api.nvim_buf_delete, source_buffer, { force = true })
+  end
+  root_repo:cleanup()
+  linked_repo:cleanup()
+  if not ok then
+    error(message, 0)
+  end
+end)
+
 it("открывает source buffer в editor window того же workspace tab", function()
   local repo = Fixture.new()
   local session

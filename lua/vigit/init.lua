@@ -334,6 +334,19 @@ end
 
 function M.open(opts)
   opts = opts or {}
+  if opts.cwd == nil
+      and workspace
+      and workspace.tab
+      and vim.api.nvim_tabpage_is_valid(workspace.tab)
+      and workspace:active_session() then
+    local shown = workspace:show_review()
+    if not shown.ok then
+      log.push(shown.error)
+      return nil, shown.error
+    end
+    return shown.value
+  end
+
   local root_result = neovim.find_repo_root(opts.cwd or current_path())
   if not root_result.ok then
     log.push(root_result.error)
