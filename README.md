@@ -99,6 +99,24 @@ end, { desc = "Vigit worktrees" })
 
 This replaces Vim's native `W` motion in normal mode.
 
+## Automatic refresh
+
+Vigit refreshes after source writes, when its tab or Neovim regains focus, and
+every two seconds while the active review is visible. Polling pauses in code
+mode, in another tab, and while a Git status read is already running. `r`
+always remains available for an explicit refresh.
+
+Tune or disable polling without changing the event-driven refreshes:
+
+```lua
+require("vigit").setup({
+  refresh = {
+    poll_interval_ms = 2000, -- 0 disables polling
+    on_focus = true,
+  },
+})
+```
+
 ## Workspace and worktree model
 
 Vigit uses the current native tab as a workspace and renders review UI as two
@@ -161,7 +179,8 @@ reply section, and an open/completed checkbox.
    worktree root.
 4. The agent updates the code or answers the question, records a concise result
    in the response section, and marks `[x]` only when complete.
-5. Refresh with `r`, or save the source file, to reload markers and status.
+5. Keep the visible review open for automatic refresh, or press `r` explicitly,
+   to reload markers and status.
 
 Install the bundled Codex workflow with:
 

@@ -37,8 +37,14 @@ it("cuts every public command over once to the shared v2 lifecycle", function()
     end
 
     local plugin = require("vigit")
-    assert_equal(plugin.setup({ refresh = { debounce_ms = 25 } }), true)
-    assert_equal(plugin.setup({ refresh = { debounce_ms = 25 } }), true)
+    assert_equal(plugin.setup({ refresh = {
+      debounce_ms = 25,
+      poll_interval_ms = 0,
+    } }), true)
+    assert_equal(plugin.setup({ refresh = {
+      debounce_ms = 25,
+      poll_interval_ms = 0,
+    } }), true)
     assert_equal(
       table.concat(command_names(calls), "\n"),
       table.concat(expected_commands, "\n")
@@ -47,7 +53,7 @@ it("cuts every public command over once to the shared v2 lifecycle", function()
       assert_equal(calls[name], 1)
       assert_equal(vim.fn.exists(":" .. name), 2)
     end
-    assert_equal(#vim.api.nvim_get_autocmds({ group = "VigitRefreshObservers" }), 2)
+    assert_equal(#vim.api.nvim_get_autocmds({ group = "VigitRefreshObservers" }), 4)
 
     repo:write("README.md", { "fixture" })
     repo:git({ "add", "--", "README.md" })

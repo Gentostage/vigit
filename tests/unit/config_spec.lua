@@ -10,6 +10,8 @@ it("deep merges supported options", function()
   assert_equal(result.value.ui.changes_width, 28)
   assert_equal(result.value.ui.changes_side, "right")
   assert_equal(result.value.refresh.debounce_ms, 50)
+  assert_equal(result.value.refresh.on_focus, true)
+  assert_equal(result.value.refresh.poll_interval_ms, 2000)
 end)
 
 it("rejects unknown and invalid options with a full path", function()
@@ -19,6 +21,18 @@ it("rejects unknown and invalid options with a full path", function()
 
   local invalid = config.resolve({ ui = { changes_width = "wide" } })
   assert_truthy(invalid.error.message:match("ui%.changes_width"))
+
+  assert_equal(config.resolve({
+    refresh = { poll_interval_ms = 0 },
+  }).ok, true)
+  for _, interval in ipairs({ -1, 1.5 }) do
+    local rejected = config.resolve({
+      refresh = { poll_interval_ms = interval },
+    })
+    assert_equal(rejected.ok, false)
+    assert_equal(rejected.error.code, "invalid_config")
+    assert_truthy(rejected.error.message:match("refresh%.poll_interval_ms"))
+  end
 end)
 
 it("rejects a fractional changes width", function()

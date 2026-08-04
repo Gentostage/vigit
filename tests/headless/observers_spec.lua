@@ -19,9 +19,15 @@ it("installs one observer group without touching source state and refreshes only
   local unrelated = vim.api.nvim_create_buf(false, true)
   local ok, message = xpcall(function()
     local plugin = require("vigit")
-    assert_equal(plugin.setup({ refresh = { debounce_ms = 25 } }), true)
-    assert_equal(plugin.setup({ refresh = { debounce_ms = 25 } }), true)
-    assert_equal(#vim.api.nvim_get_autocmds({ group = "VigitRefreshObservers" }), 2)
+    assert_equal(plugin.setup({ refresh = {
+      debounce_ms = 25,
+      poll_interval_ms = 0,
+    } }), true)
+    assert_equal(plugin.setup({ refresh = {
+      debounce_ms = 25,
+      poll_interval_ms = 0,
+    } }), true)
+    assert_equal(#vim.api.nvim_get_autocmds({ group = "VigitRefreshObservers" }), 4)
 
     session = assert(require("vigit.v2").open({ cwd = repo.root }))
     other_session = assert(require("vigit.v2").open({ cwd = other_repo.root }))
@@ -72,6 +78,13 @@ it("installs one observer group without touching source state and refreshes only
     end, 10))
     wait_idle(session)
 
+    before = session.reads.generation
+    vim.api.nvim_exec_autocmds("FocusGained", {})
+    assert_truthy(vim.wait(1000, function()
+      return session.reads.generation == before + 1
+    end, 10))
+    wait_idle(session)
+
     vim.cmd("tabnew")
     before = session.reads.generation
     local other_before = other_session.reads.generation
@@ -101,6 +114,61 @@ it("installs one observer group without touching source state and refreshes only
   end
   repo:cleanup()
   other_repo:cleanup()
+  if not ok then error(message, 0) end
+end)
+
+it("polls only a visible idle review in the current workspace tab", function()
+  local repo = Fixture.new()
+  local session
+  local external_tab
+  local plugin = require("vigit")
+  local ok, message = xpcall(function()
+    assert_equal(plugin.setup({ refresh = {
+      debounce_ms = 5,
+      on_write = false,
+      on_tab_enter = false,
+      on_focus = false,
+      poll_interval_ms = 25,
+    } }), true)
+    session = assert(require("vigit.v2").open({ cwd = repo.root }))
+    wait_idle(session)
+
+    local before = session.reads.generation
+    assert_truthy(vim.wait(1000, function()
+      return session.reads.generation > before
+    end, 10))
+    wait_idle(session)
+
+    session.busy.status = { cancel = function() end }
+    before = session.reads.generation
+    vim.wait(100)
+    assert_equal(session.reads.generation, before)
+    session.busy.status = nil
+
+    vim.cmd("tabnew")
+    external_tab = vim.api.nvim_get_current_tabpage()
+    before = session.reads.generation
+    vim.wait(100)
+    assert_equal(session.reads.generation, before)
+    vim.api.nvim_set_current_tabpage(session.owned.tab)
+    vim.cmd("tabclose " .. vim.api.nvim_tabpage_get_number(external_tab))
+    external_tab = nil
+
+    controller.dispatch(session, "close")
+    vim.wait(30)
+    wait_idle(session)
+    before = session.reads.generation
+    vim.wait(100)
+    assert_equal(session.reads.generation, before)
+  end, debug.traceback)
+
+  assert_equal(plugin.setup({ refresh = { poll_interval_ms = 0 } }), true)
+  if external_tab and vim.api.nvim_tabpage_is_valid(external_tab) then
+    vim.api.nvim_set_current_tabpage(external_tab)
+    pcall(vim.cmd, "tabclose")
+  end
+  close_session(session)
+  repo:cleanup()
   if not ok then error(message, 0) end
 end)
 

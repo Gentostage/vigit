@@ -94,6 +94,9 @@ it("показывает review overlay в текущем tab и скрывае�
     assert_truthy(layout.is_visible(session))
     assert_truthy(vim.api.nvim_win_is_valid(session.owned.diff_win))
     assert_truthy(vim.api.nvim_win_is_valid(session.owned.changes_win))
+    assert_truthy(vim.wait(2000, function()
+      return session.busy.status == nil
+    end, 10))
 
     controller.dispatch(session, "close")
 
@@ -102,6 +105,13 @@ it("показывает review overlay в текущем tab и скрывае�
     assert_equal(#vim.api.nvim_list_tabpages(), initial_tabs)
     assert_equal(vim.api.nvim_get_current_tabpage(), initial_tab)
     assert_equal(vim.api.nvim_get_current_win(), initial_win)
+
+    local before = session.reads.generation
+    assert_equal(assert(v2.open()), session)
+    assert_truthy(vim.wait(1000, function()
+      return session.reads.generation == before + 1
+    end, 10))
+    assert_truthy(layout.is_visible(session))
   end, debug.traceback)
 
   close_session(session)
@@ -181,6 +191,51 @@ it("повторно показывает явно выбранный worktree �
   end
   root_repo:cleanup()
   linked_repo:cleanup()
+  if not ok then
+    error(message, 0)
+  end
+end)
+
+it("выбирает worktree текущего файла при вызове Vigit из внешнего tab", function()
+  local repo = Fixture.new()
+  local linked = vim.fn.tempname()
+  local root_session
+  local linked_session
+  local external_tab
+  local source_buffer
+
+  local ok, message = xpcall(function()
+    repo:write("src/service.py", { "value = 1" })
+    repo:git({ "add", "--", "src/service.py" })
+    repo:commit("initial")
+    repo:git({ "worktree", "add", "-q", "-b", "linked", linked })
+
+    root_session = assert(v2.open({ cwd = repo.root }))
+    controller.dispatch(root_session, "close")
+
+    vim.cmd("tabnew")
+    external_tab = vim.api.nvim_get_current_tabpage()
+    vim.cmd("edit " .. vim.fn.fnameescape(linked .. "/src/service.py"))
+    source_buffer = vim.api.nvim_get_current_buf()
+
+    linked_session = assert(v2.open())
+
+    assert_equal(linked_session.root, assert(vim.uv.fs_realpath(linked)))
+    assert_equal(v2.active_session(), linked_session)
+    assert_truthy(layout.is_visible(linked_session))
+  end, debug.traceback)
+
+  close_session(linked_session)
+  close_session(root_session)
+  if external_tab and vim.api.nvim_tabpage_is_valid(external_tab) then
+    vim.api.nvim_set_current_tabpage(external_tab)
+    pcall(vim.cmd, "tabclose")
+  end
+  if source_buffer and vim.api.nvim_buf_is_valid(source_buffer) then
+    pcall(vim.api.nvim_buf_delete, source_buffer, { force = true })
+  end
+  vim.fn.delete(linked, "rf")
+  repo:cleanup()
   if not ok then
     error(message, 0)
   end

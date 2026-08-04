@@ -14,7 +14,9 @@ local defaults = {
   refresh = {
     on_write = true,
     on_tab_enter = true,
+    on_focus = true,
     debounce_ms = 120,
+    poll_interval_ms = 2000,
   },
   review = {
     path = ".vigit/comments.md",
@@ -35,7 +37,9 @@ local schema = {
   refresh = {
     on_write = "boolean",
     on_tab_enter = "boolean",
+    on_focus = "boolean",
     debounce_ms = "number",
+    poll_interval_ms = "integer",
   },
   review = {
     path = "string",
@@ -134,6 +138,9 @@ function M.resolve(user_opts)
   end
   if not valid_review_path(value.review.path) then
     return invalid("review.path", "a safe repository-relative file path")
+  end
+  if value.refresh.poll_interval_ms < 0 then
+    return invalid("refresh.poll_interval_ms", "a non-negative integer")
   end
   return Result.ok(value)
 end

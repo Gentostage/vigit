@@ -30,6 +30,7 @@ local worktrees
 local workspace
 local reconciled_generation = setmetatable({}, { __mode = "k" })
 local pending_refreshes = setmetatable({}, { __mode = "k" })
+local refresh_timer
 
 local function log_session_error(session)
   if not session or not session.error then
@@ -74,7 +75,50 @@ local function request_refresh(session)
   end, config.get().refresh.debounce_ms)
 end
 
+local function request_idle_refresh(session)
+  if session and not session.busy.status then
+    request_refresh(session)
+  end
+end
+
+local function stop_refresh_timer()
+  local timer = refresh_timer
+  refresh_timer = nil
+  if timer and not timer:is_closing() then
+    timer:stop()
+    timer:close()
+  end
+end
+
+local function polling_session()
+  local session = workspace and workspace:active_session()
+  if not session
+      or session.closed
+      or session.busy.status
+      or not session.owned.tab
+      or not vim.api.nvim_tabpage_is_valid(session.owned.tab)
+      or vim.api.nvim_get_current_tabpage() ~= session.owned.tab
+      or not layout.is_visible(session) then
+    return nil
+  end
+  return session
+end
+
+local function start_refresh_timer()
+  local interval = config.get().refresh.poll_interval_ms
+  if interval <= 0 then return end
+
+  local timer = assert(vim.uv.new_timer())
+  refresh_timer = timer
+  timer:start(interval, interval, vim.schedule_wrap(function()
+    if refresh_timer ~= timer then return end
+    local session = polling_session()
+    if session then request_refresh(session) end
+  end))
+end
+
 function M.setup_observers()
+  stop_refresh_timer()
   local group = vim.api.nvim_create_augroup("VigitRefreshObservers", { clear = true })
   vim.api.nvim_create_autocmd("BufWritePost", {
     group = group,
@@ -101,6 +145,21 @@ function M.setup_observers()
     end,
     desc = "Refresh the entered Vigit tab",
   })
+  vim.api.nvim_create_autocmd("FocusGained", {
+    group = group,
+    callback = function()
+      if not config.get().refresh.on_focus then return end
+      local session = polling_session()
+      if session then request_refresh(session) end
+    end,
+    desc = "Refresh the visible Vigit review after focus returns",
+  })
+  vim.api.nvim_create_autocmd("VimLeavePre", {
+    group = group,
+    callback = stop_refresh_timer,
+    desc = "Stop Vigit automatic refresh",
+  })
+  start_refresh_timer()
 end
 
 local function all_missing_ids(session)
@@ -338,12 +397,14 @@ function M.open(opts)
       and workspace
       and workspace.tab
       and vim.api.nvim_tabpage_is_valid(workspace.tab)
+      and vim.api.nvim_get_current_tabpage() == workspace.tab
       and workspace:active_session() then
     local shown = workspace:show_review()
     if not shown.ok then
       log.push(shown.error)
       return nil, shown.error
     end
+    request_idle_refresh(shown.value)
     return shown.value
   end
 
@@ -354,10 +415,14 @@ function M.open(opts)
   end
 
   local active = ensure_workspace()
+  local existing = active.sessions[root_result.value]
   local opened = active:open(root_result.value)
   if not opened.ok then
     log.push(opened.error)
     return nil, opened.error
+  end
+  if opened.value == existing then
+    request_idle_refresh(opened.value)
   end
   return opened.value
 end
