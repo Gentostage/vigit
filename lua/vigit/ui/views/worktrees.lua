@@ -296,6 +296,8 @@ function M.open(opts)
     app = app,
     origin = origin,
     origin_tab = opts.origin_tab or vim.api.nvim_get_current_tabpage(),
+    return_mode = opts.return_mode or "review",
+    source_buffer = opts.source_buffer,
     rows = {},
     targets = {},
     row_by_path = {},
@@ -354,7 +356,10 @@ function M.open(opts)
         self.error = result.error
         self:render_now()
       end
-    end)
+    end, {
+      mode = self.return_mode,
+      source_buffer = self.source_buffer,
+    })
     pending.cancel = handle and handle.cancel
   end
   function picker:fetch()

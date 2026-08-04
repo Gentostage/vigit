@@ -351,6 +351,16 @@ function M.render(state, width, opts)
     expanded_dirs
   )
 
+  local selected_change_id = state.view and state.view.selected_change_id
+  if selected_change_id then
+    for _, target in ipairs(output.targets) do
+      if target.kind == "change" and target.change_id == selected_change_id then
+        add_highlight(output, target.row, "VigitChangesSelected")
+        break
+      end
+    end
+  end
+
   if #output.targets == 0 then
     add_line(output, "No changes", "Comment")
   end

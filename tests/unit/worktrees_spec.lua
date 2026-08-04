@@ -225,9 +225,10 @@ it("старый list cancel не отменяет более новое пок�
   assert_equal(app.request, nil)
 end)
 
-it("переключает active Vigit-сессию по каноническому root", function()
+it("переключает active Vigit-сессию по каноническому root и передаёт режим", function()
   local Worktrees = require("vigit.application.worktrees")
   local switched = {}
+  local switched_mode
   local session = { id = "first", root = "/repo/a", closed = false }
   local app = Worktrees.new({
     git = fake_git({}),
@@ -236,16 +237,20 @@ it("переключает active Vigit-сессию по каноническо
         callback(Result.ok(path:gsub("/$", "")))
       end,
     },
-    switch_session = function(root)
+    switch_session = function(root, opts)
       switched[#switched + 1] = root
+      switched_mode = opts and opts.mode
       return Result.ok(session)
     end,
   })
   local result
 
-  app:open({ path = "/repo/a/" }, function(value) result = value end)
+  app:open({ path = "/repo/a/" }, function(value) result = value end, {
+    mode = "code",
+  })
   assert_equal(result.value, session)
   assert_equal(switched, { "/repo/a" })
+  assert_equal(switched_mode, "code")
 end)
 
 it("оставляет picker доступным, если worktree исчез до открытия", function()
@@ -433,7 +438,7 @@ it("принимает completion probes и fetch ровно один раз", f
   assert_equal(completed, 1)
 end)
 
-it("блокирует unsafe worktree до y/N confirmation и разрешает только безопасный behind", function()
+it("блокирует unsafe worktree, но разрешает behind и непроверенный upstream", function()
   local worktree = require("vigit.core.worktree")
   local safe = {
     kind = "linked",
@@ -452,13 +457,25 @@ it("блокирует unsafe worktree до y/N confirmation и разрешае
     { entry = with({ locked = "hold" }), want = "locked" },
     { entry = with({ prunable = "stale" }), want = "prunable" },
     { entry = with({ files = { staged = 1, unstaged = 0, untracked = 0 } }), want = "dirty" },
-    { entry = with({ upstream = { state = "no_upstream" } }), want = "no_upstream" },
     { entry = with({ upstream = { state = "tracking", source = "local_refs", ahead = 1, behind = 0 } }), want = "ahead" },
   }
 
   for _, case in ipairs(cases) do
     assert_equal(worktree.removal_blocker(case.entry, {}), case.want)
   end
+  assert_equal(worktree.removal_blocker(with({
+    upstream = { state = "no_upstream" },
+  }), {}), nil)
+  local upstream_error = with({
+    probes = {
+      upstream = {
+        state = "error",
+        error = { code = "git_upstream_failed" },
+      },
+    },
+  })
+  upstream_error.upstream = nil
+  assert_equal(worktree.removal_blocker(upstream_error, {}), nil)
   assert_equal(worktree.removal_blocker(safe, { "/repo/wt-two-old/source.lua" }), nil)
   assert_equal(worktree.removal_blocker(safe, { "/repo/wt-two/source.lua" }), "loaded_source_buffer")
   assert_equal(worktree.removal_blocker(safe, {}), nil)
@@ -513,6 +530,133 @@ it("повторно проверяет worktree после confirmation до re
   assert_equal(removed, 0)
   assert_equal(result.ok, false)
   assert_equal(result.error.code, "dirty")
+end)
+
+it("предупреждает перед удалением worktree без проверенного upstream", function()
+  local Worktrees = require("vigit.application.worktrees")
+  local Result = require("vigit.core.result")
+  local prompts = {}
+  local app = Worktrees.new({
+    git = fake_git({}),
+    neovim = {
+      loaded_source_buffers = function() return Result.ok({}) end,
+    },
+    confirm = function(message, callback)
+      prompts[#prompts + 1] = message
+      callback(false)
+    end,
+  })
+  local entries = {
+    {
+      kind = "linked",
+      path = "/repo/no-upstream",
+      files = { staged = 0, unstaged = 0, untracked = 0 },
+      upstream = { state = "no_upstream" },
+    },
+    {
+      kind = "linked",
+      path = "/repo/upstream-error",
+      files = { staged = 0, unstaged = 0, untracked = 0 },
+      probes = {
+        upstream = {
+          state = "error",
+          error = { code = "git_upstream_failed" },
+        },
+      },
+    },
+  }
+
+  for _, entry in ipairs(entries) do
+    local result
+    app:remove(entry, function(value) result = value end)
+    assert_equal(result.error.code, "confirmation_cancelled")
+  end
+
+  assert_equal(
+    prompts[1],
+    "Remove /repo/no-upstream? Branch will be kept. Warning: upstream is not configured; commits may not be published."
+  )
+  assert_equal(
+    prompts[2],
+    "Remove /repo/upstream-error? Branch will be kept. Warning: upstream could not be verified; commits may not be published."
+  )
+end)
+
+it("удаляет clean worktree после fresh upstream probe error", function()
+  local Worktrees = require("vigit.application.worktrees")
+  local Result = require("vigit.core.result")
+  local entry = {
+    kind = "linked",
+    path = "/repo/linked",
+    head = "abc123",
+    branch_ref = "refs/heads/linked",
+    files = { staged = 0, unstaged = 0, untracked = 0 },
+    probes = {
+      upstream = {
+        state = "error",
+        error = { code = "git_upstream_failed" },
+      },
+    },
+  }
+  local list_calls = 0
+  local removed = 0
+  local git = {
+    worktrees = function(_, _, callback)
+      list_calls = list_calls + 1
+      callback(Result.ok(list_calls == 1 and {
+        {
+          kind = "root",
+          path = "/repo",
+          head = "main123",
+          branch_ref = "refs/heads/main",
+        },
+        entry,
+      } or {
+        {
+          kind = "root",
+          path = "/repo",
+          head = "main123",
+          branch_ref = "refs/heads/main",
+        },
+      }))
+      return { cancel = function() end }
+    end,
+    worktree_status = function(_, _, callback)
+      callback(Result.ok({ staged = 0, unstaged = 0, untracked = 0 }))
+      return { cancel = function() end }
+    end,
+    upstream = function(_, _, callback)
+      callback(Result.err("git_upstream_failed", "upstream unavailable"))
+      return { cancel = function() end }
+    end,
+    remove_worktree = function(_, primary, target, callback)
+      assert_equal(primary, "/repo")
+      assert_equal(target, "/repo/linked")
+      removed = removed + 1
+      callback(Result.ok(true))
+      return { cancel = function() end }
+    end,
+  }
+  local app = Worktrees.new({
+    git = git,
+    neovim = {
+      loaded_source_buffers = function() return Result.ok({}) end,
+    },
+    confirm = function(message, callback)
+      assert_equal(
+        message,
+        "Remove /repo/linked? Branch will be kept. Warning: upstream could not be verified; commits may not be published."
+      )
+      callback(true)
+    end,
+  })
+  local result
+
+  app:remove(entry, function(value) result = value end)
+
+  assert_equal(result.ok, true)
+  assert_equal(removed, 1)
+  assert_equal(list_calls, 2)
 end)
 
 it("оставляет Vigit-сессию открытой, если postcondition всё ещё видит worktree", function()
@@ -605,11 +749,6 @@ it("не читает buffers и не спрашивает confirmation для �
       files = { staged = 1, unstaged = 0, untracked = 0 },
       want = "dirty",
       message = "Cannot remove: commit, stash, or discard local changes first",
-    },
-    {
-      upstream = { state = "no_upstream" },
-      want = "no_upstream",
-      message = "Cannot remove: push the branch and set its upstream first",
     },
     {
       upstream = { state = "tracking", source = "local_refs", ahead = 1, behind = 0 },

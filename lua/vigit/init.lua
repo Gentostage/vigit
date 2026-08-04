@@ -233,9 +233,70 @@ controller.configure({
 local function current_path()
   local buffer_path = vim.api.nvim_buf_get_name(0)
   if buffer_path ~= "" and not buffer_path:match("^%a+://") then
-    return buffer_path
+    return buffer_path, "code_buffer"
   end
-  return vim.uv.cwd()
+  return vim.uv.cwd(), "cwd"
+end
+
+local function current_workspace()
+  if not workspace
+      or not workspace.tab
+      or not vim.api.nvim_tabpage_is_valid(workspace.tab)
+      or vim.api.nvim_get_current_tabpage() ~= workspace.tab then
+    return nil
+  end
+  return workspace
+end
+
+local function invocation_mode()
+  local active = current_workspace()
+  if active and active:mode_name() == "review" then return "review" end
+  return "code"
+end
+
+local function record_root_resolution(source, path, root, mode)
+  local active_root = workspace and workspace.root or nil
+  local details = {
+    source = source,
+    path = path,
+    root = root,
+    active_root = active_root,
+    mode = mode,
+  }
+  log.event("root_resolved", details)
+  if active_root and active_root ~= root then
+    log.event("root_mismatch", details)
+  end
+end
+
+local function resolve_invocation_root(opts)
+  opts = opts or {}
+  local mode = opts.mode or invocation_mode()
+  local active = current_workspace()
+  local active_session = active and active:active_session() or nil
+  if opts.cwd ~= nil then
+    local resolved = neovim.find_repo_root(opts.cwd)
+    if resolved.ok then
+      record_root_resolution(opts.source or "explicit", opts.cwd, resolved.value, mode)
+    end
+    return resolved
+  end
+  if mode == "review" and active_session then
+    record_root_resolution("review_session", active_session.root, active_session.root, mode)
+    return Result.ok(active_session.root)
+  end
+
+  local path, source = current_path()
+  local resolved = neovim.find_repo_root(path)
+  if resolved.ok then
+    record_root_resolution(source, path, resolved.value, mode)
+    return resolved
+  end
+  if active_session then
+    record_root_resolution("session_fallback", path, active_session.root, mode)
+    return Result.ok(active_session.root)
+  end
+  return resolved
 end
 
 local function worktree_root(path, callback)
@@ -254,9 +315,36 @@ worktrees = Worktrees.new({
     platform = package.config:sub(1, 1) == "\\" and "win32" or "posix",
   },
   concurrency = 4,
-  switch_session = function(root)
-    local session, open_error = M.open({ cwd = root })
+  switch_session = function(root, opts)
+    local previous_root = workspace and workspace.root or nil
+    local session, open_error = M.open({
+      cwd = root,
+      source = "worktree_picker",
+      skip_switch_event = true,
+    })
     if session then
+      if opts and opts.mode == "code" then
+        if opts.source_buffer then
+          neovim.remember_source_buffer(
+            session.resources,
+            session.root,
+            opts.source_buffer
+          )
+        end
+        local code_mode = workspace:show_code()
+        if not code_mode.ok then return code_mode end
+        local restored = neovim.show_editor(session, workspace)
+        if not restored.ok then return restored end
+      end
+      if previous_root ~= session.root then
+        log.event("session_switch", {
+          source = "worktree_picker",
+          from_root = previous_root,
+          to_root = session.root,
+          mode = opts and opts.mode or "review",
+          session_id = session.id,
+        })
+      end
       return Result.ok(session)
     end
     return Result.err(
@@ -399,22 +487,8 @@ end
 
 function M.open(opts)
   opts = opts or {}
-  if opts.cwd == nil
-      and workspace
-      and workspace.tab
-      and vim.api.nvim_tabpage_is_valid(workspace.tab)
-      and vim.api.nvim_get_current_tabpage() == workspace.tab
-      and workspace:active_session() then
-    local shown = workspace:show_review()
-    if not shown.ok then
-      log.push(shown.error)
-      return nil, shown.error
-    end
-    request_idle_refresh(shown.value)
-    return shown.value
-  end
-
-  local root_result = neovim.find_repo_root(opts.cwd or current_path())
+  local previous_root = workspace and workspace.root or nil
+  local root_result = resolve_invocation_root(opts)
   if not root_result.ok then
     log.push(root_result.error)
     return nil, root_result.error
@@ -429,6 +503,15 @@ function M.open(opts)
   end
   if opened.value == existing then
     request_idle_refresh(opened.value)
+  end
+  if not opts.skip_switch_event and previous_root ~= opened.value.root then
+    log.event("session_switch", {
+      source = opts.source or (opts.cwd and "explicit" or "command"),
+      from_root = previous_root,
+      to_root = opened.value.root,
+      mode = "review",
+      session_id = opened.value.id,
+    })
   end
   return opened.value
 end
@@ -446,22 +529,41 @@ end
 function M.worktrees(opts)
   opts = opts or {}
   local session = opts.session
-  local root
-  if session and not session.closed then
-    root = session.root
-  else
-    local root_result = neovim.find_repo_root(opts.cwd or current_path())
-    if not root_result.ok then
-      log.push(root_result.error)
-      return nil, root_result.error
-    end
-    root = root_result.value
+  local active = workspace and workspace:active_session() or nil
+  local return_mode = invocation_mode()
+  local root_result = resolve_invocation_root({
+    cwd = opts.cwd,
+    mode = return_mode,
+    source = "worktree_picker",
+  })
+  if not root_result.ok then
+    log.push(root_result.error)
+    return nil, root_result.error
   end
-  local origin = session or { root = root, closed = false }
+  local root = root_result.value
+  local context_session = workspace and workspace.sessions[root] or nil
+  if not context_session and session and not session.closed and session.root == root then
+    context_session = session
+  elseif not context_session and active and active.root == root then
+    context_session = active
+  end
+  local source_buffer = return_mode == "code"
+      and vim.api.nvim_get_current_buf()
+    or nil
+  if return_mode == "code" and context_session and not context_session.closed then
+    neovim.remember_source_buffer(
+      context_session.resources,
+      context_session.root,
+      source_buffer
+    )
+  end
+  local origin = context_session or { root = root, closed = false }
   return worktrees_view.open({
     app = worktrees,
     origin = origin,
     origin_tab = vim.api.nvim_get_current_tabpage(),
+    return_mode = return_mode,
+    source_buffer = source_buffer,
     selected_path = root,
   })
 end

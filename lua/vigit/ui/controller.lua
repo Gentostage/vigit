@@ -307,12 +307,34 @@ local function active_change(session)
   return change_for(session, target.change_id)
 end
 
-local function file_target_position(session, change_id)
+local function file_target_position(session, change_id, section)
+  local position = 0
   for index, target in ipairs(renderer.file_targets(session)) do
+    local change = target.change or change_for(session, target.change_id)
+    if not section or (change and change.section == section) then
+      position = position + 1
+    end
     if target.change_id == change_id then
-      return index
+      return section and position or index
     end
   end
+end
+
+local function owned_focus(session)
+  local current = vim.api.nvim_get_current_win()
+  if current == session.owned.diff_win or current == session.owned.changes_win then
+    return current
+  end
+end
+
+local function restore_owned_focus(session, window)
+  if session.closed
+      or (window ~= session.owned.diff_win and window ~= session.owned.changes_win)
+      or not window
+      or not vim.api.nvim_win_is_valid(window) then
+    return
+  end
+  vim.api.nvim_set_current_win(window)
 end
 
 local function file_anchor(session, change)
@@ -335,7 +357,15 @@ local function mutation_error(session, error)
   renderer.render(session)
 end
 
-local function refresh_file_mutation(session, path, section, source_anchor, target_position)
+local function refresh_file_mutation(
+    session,
+    path,
+    section,
+    source_anchor,
+    target_position,
+    focus_window,
+    source_only
+)
   context.changes:refresh(session, function(event)
     if session.closed or not event.result.ok or event.phase ~= "status" then
       return
@@ -349,7 +379,13 @@ local function refresh_file_mutation(session, path, section, source_anchor, targ
       end
     end
     if not updated then
-      local targets = renderer.file_targets(session)
+      local targets = {}
+      for _, target in ipairs(renderer.file_targets(session)) do
+        local change = target.change or change_for(session, target.change_id)
+        if change and (not source_only or change.section == section) then
+          targets[#targets + 1] = target
+        end
+      end
       local target = targets[math.min(target_position or 1, #targets)]
       updated = target and change_for(session, target.change_id) or nil
     end
@@ -357,6 +393,7 @@ local function refresh_file_mutation(session, path, section, source_anchor, targ
       session.view.selected_change_id = nil
       session.view.anchor = nil
       renderer.render(session)
+      restore_owned_focus(session, focus_window)
       return
     end
 
@@ -376,6 +413,7 @@ local function refresh_file_mutation(session, path, section, source_anchor, targ
           true
         ) or restored_anchor
       end
+      restore_owned_focus(session, focus_window)
     end)
   end)
 end
@@ -407,6 +445,7 @@ local function toggle_file_index(session)
   session.mutations.toggle_serial = (session.mutations.toggle_serial or 0) + 1
   local source_anchor = file_anchor(session, change)
   local target_position = file_target_position(session, change.id)
+  local focus_window = owned_focus(session)
   local destination_section = change.section == "staged" and "unstaged" or "staged"
   context.mutations:enqueue(session, {
     id = "toggle_file_index:" .. session.mutations.toggle_serial,
@@ -419,7 +458,9 @@ local function toggle_file_index(session)
         change.path,
         destination_section,
         source_anchor,
-        target_position
+        target_position,
+        focus_window,
+        false
       )
     end,
   })
@@ -478,9 +519,10 @@ local function toggle_hunk_index(session)
   session.mutations = session.mutations or {}
   session.mutations.toggle_hunk_serial = (session.mutations.toggle_hunk_serial or 0) + 1
   local source_anchor = file_anchor(session, change)
-  local target_position = file_target_position(session, change.id)
+  local source_section = change.section
+  local target_position = file_target_position(session, change.id, source_section)
+  local focus_window = owned_focus(session)
   local mutation_path = change.path
-  local destination_section
   context.mutations:enqueue(session, {
     id = "toggle_hunk_index:" .. session.mutations.toggle_hunk_serial,
     run = function(done)
@@ -517,7 +559,6 @@ local function toggle_hunk_index(session)
             done(Result.err("stale_hunk", "Selected hunk is missing or stale"))
             return
           end
-          destination_section = latest_change.section == "staged" and "unstaged" or "staged"
           mutation_path = latest_change.path
           context.changes.git[method](
             context.changes.git,
@@ -533,9 +574,11 @@ local function toggle_hunk_index(session)
       refresh_file_mutation(
         session,
         mutation_path,
-        destination_section,
+        source_section,
         source_anchor,
-        target_position
+        target_position,
+        focus_window,
+        true
       )
     end,
   })

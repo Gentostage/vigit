@@ -33,6 +33,21 @@ it("does not turn a successful Result into a diagnostic", function()
   assert_equal(log.entries()[1].code, "git_failed")
 end)
 
+it("records structured info events without turning them into errors", function()
+  local log = fresh_log()
+
+  local entry = log.event("root_resolved", {
+    source = "code_buffer",
+    root = "/repo-linked",
+    active_root = "/repo-root",
+  })
+
+  assert_equal(entry.level, "info")
+  assert_equal(entry.code, "root_resolved")
+  assert_equal(log.entries()[1].details.source, "code_buffer")
+  assert_truthy(table.concat(log.lines(), "\n"):find("[INFO] root_resolved", 1, true) ~= nil)
+end)
+
 it("renders escaped diagnostic details without control bytes", function()
   local log = fresh_log()
   log.push({

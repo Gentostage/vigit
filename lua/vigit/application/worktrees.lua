@@ -12,10 +12,26 @@ local removal_messages = {
   locked = "Cannot remove: worktree is locked",
   prunable = "Cannot remove: worktree metadata is stale",
   dirty = "Cannot remove: commit, stash, or discard local changes first",
-  no_upstream = "Cannot remove: push the branch and set its upstream first",
   ahead = "Cannot remove: push local commits first",
   loaded_source_buffer = "Cannot remove: close source buffers from this worktree first",
 }
+
+local function removal_confirmation(entry)
+  local message = "Remove " .. entry.path .. "? Branch will be kept."
+  local probe = entry.probes and entry.probes.upstream
+  if probe and probe.state == "error" then
+    return message
+      .. " Warning: upstream could not be verified; commits may not be published."
+  end
+  local upstream = entry.upstream
+  if type(upstream) ~= "table"
+      or upstream.state ~= "tracking"
+      or upstream.source ~= "local_refs" then
+    return message
+      .. " Warning: upstream is not configured; commits may not be published."
+  end
+  return message
+end
 
 local function basename(path)
   return tostring(path or ""):gsub("/+$", ""):match("([^/]+)$")
@@ -262,7 +278,7 @@ function Worktrees:remove(entry, callback, origin)
   local confirmed_identity = worktree_identity(entry)
 
   local confirmation = self.confirm(
-    "Remove " .. entry.path .. "? Branch will be kept.",
+    removal_confirmation(entry),
     once(function(accepted)
       if cancelled then return end
       if accepted ~= true then
@@ -297,13 +313,21 @@ function Worktrees:remove(entry, callback, origin)
           if not status_result.ok then complete(status_result); return end
           add_handle(self.git:upstream(target.path, once(function(upstream_result)
             if cancelled then return end
-            if not upstream_result.ok then complete(upstream_result); return end
             target.files = {
               staged = tonumber(status_result.value.staged) or 0,
               unstaged = tonumber(status_result.value.unstaged) or 0,
               untracked = tonumber(status_result.value.untracked) or 0,
             }
-            target.upstream = upstream_result.value
+            if upstream_result.ok then
+              target.upstream = upstream_result.value
+            else
+              target.upstream = nil
+              target.probes = target.probes or {}
+              target.probes.upstream = {
+                state = "error",
+                error = upstream_result.error,
+              }
+            end
             local blocker, blocker_error = self:_removal_blocker(target, target.path)
             if blocker_error then complete(blocker_error); return end
             if blocker then fail_blocker(blocker); return end
@@ -500,7 +524,7 @@ function Worktrees:list(origin, callback)
   }
 end
 
-function Worktrees:open(entry, callback)
+function Worktrees:open(entry, callback, opts)
   local function complete(result)
     if callback then callback(result) end
   end
@@ -538,7 +562,7 @@ function Worktrees:open(entry, callback)
       done(Result.err("worktree_open_unavailable", "Worktree switcher is unavailable"))
       return
     end
-    local switched = self.switch_session(root)
+    local switched = self.switch_session(root, opts or {})
     if not Result.is(switched) then
       done(Result.err("worktree_open_failed", "Unable to switch Vigit worktree", switched))
       return

@@ -1,6 +1,7 @@
 local Fixture = require("tests.fixtures.git_repo")
 local controller = require("vigit.ui.controller")
 local layout = require("vigit.ui.layout")
+local log = require("vigit.ui.log")
 local renderer = require("vigit.ui.renderer")
 local v2 = require("vigit.v2")
 
@@ -153,7 +154,7 @@ it("переключает два worktree через одну live session в �
   end
 end)
 
-it("повторно показывает явно выбранный worktree независимо от скрытого source buffer", function()
+it("в code mode открывает Vigit для worktree текущего source buffer", function()
   local root_repo = Fixture.new()
   local linked_repo = Fixture.new()
   local root_session
@@ -178,10 +179,25 @@ it("повторно показывает явно выбранный worktree �
 
     local reopened = assert(v2.open())
 
-    assert_equal(reopened, root_session)
-    assert_equal(v2.active_session(), root_session)
-    assert_equal(vim.fn.getcwd(0, 0), assert(vim.uv.fs_realpath(root_repo.root)))
-    assert_truthy(layout.is_visible(root_session))
+    assert_equal(reopened, linked_session)
+    assert_equal(v2.active_session(), linked_session)
+    assert_equal(vim.fn.getcwd(0, 0), assert(vim.uv.fs_realpath(linked_repo.root)))
+    assert_truthy(layout.is_visible(linked_session))
+    local saw_mismatch = false
+    local saw_switch = false
+    for _, entry in ipairs(log.entries()) do
+      if entry.code == "root_mismatch"
+          and entry.details.root == linked_session.root
+          and entry.details.active_root == root_session.root then
+        saw_mismatch = true
+      elseif entry.code == "session_switch"
+          and entry.details.from_root == root_session.root
+          and entry.details.to_root == linked_session.root then
+        saw_switch = true
+      end
+    end
+    assert_truthy(saw_mismatch)
+    assert_truthy(saw_switch)
   end, debug.traceback)
 
   close_session(root_session)

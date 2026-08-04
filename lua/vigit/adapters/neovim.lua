@@ -179,6 +179,73 @@ function M.loaded_source_buffers(root)
   return Result.ok(buffers)
 end
 
+function M.remember_source_buffer(resources, root, buffer)
+  if type(resources) ~= "table"
+      or type(root) ~= "string"
+      or not buffer
+      or not vim.api.nvim_buf_is_valid(buffer)
+      or not vim.api.nvim_buf_is_loaded(buffer)
+      or vim.bo[buffer].buftype ~= "" then
+    return false
+  end
+  local name = vim.api.nvim_buf_get_name(buffer)
+  if name == "" then return false end
+  local path = canonical_path(name)
+  local canonical_root = canonical_path(root)
+  if not path or not canonical_root or not is_within(canonical_root, path) then
+    return false
+  end
+  resources.source_buffers = resources.source_buffers or {}
+  resources.source_buffers[buffer] = path
+  resources.last_source_buffer = buffer
+  return true
+end
+
+local function remembered_source_buffer(session)
+  local resources = session and session.resources or {}
+  local buffer = resources.last_source_buffer
+  if not buffer
+      or not vim.api.nvim_buf_is_valid(buffer)
+      or not vim.api.nvim_buf_is_loaded(buffer)
+      or vim.bo[buffer].buftype ~= "" then
+    return nil
+  end
+  local path = resources.source_buffers and resources.source_buffers[buffer]
+  local canonical_root = canonical_path(session.root)
+  if type(path) ~= "string"
+      or not canonical_root
+      or not is_within(canonical_root, path) then
+    return nil
+  end
+  return buffer
+end
+
+function M.show_editor(session, workspace)
+  local result
+  local ok, message = xpcall(function()
+    local window = workspace_window(workspace)
+    if not window then error("Vigit workspace is unavailable") end
+    local buffer = remembered_source_buffer(session)
+      or vim.api.nvim_create_buf(true, false)
+    vim.api.nvim_set_current_tabpage(workspace.tab)
+    vim.api.nvim_set_current_win(window)
+    vim.api.nvim_win_set_buf(window, buffer)
+    result = Result.ok({
+      tab = workspace.tab,
+      win = window,
+      buf = buffer,
+    })
+  end, debug.traceback)
+  if not ok then
+    result = Result.err(
+      "editor_restore_failed",
+      "Unable to restore the selected worktree editor",
+      message
+    )
+  end
+  return result
+end
+
 local function buffer_visible_in_other_tab(buffer, workspace_tab)
   for _, tab in ipairs(vim.api.nvim_list_tabpages()) do
     if tab ~= workspace_tab and vim.api.nvim_tabpage_is_valid(tab) then
@@ -271,8 +338,7 @@ function M.open_file(context, done)
     end)
     local resources = context.resources
     if resources then
-      resources.source_buffers = resources.source_buffers or {}
-      resources.source_buffers[buffer] = context.path
+      M.remember_source_buffer(resources, context.root, buffer)
     end
 
     vim.api.nvim_tabpage_set_var(tab, "vigit_root", context.root)

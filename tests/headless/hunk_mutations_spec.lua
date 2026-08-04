@@ -2,12 +2,13 @@ local Result = require("vigit.core.result")
 local Session = require("vigit.ui.session")
 local anchor = require("vigit.core.anchor")
 
-local function change(section)
+local function change(section, path)
+  path = path or "file.txt"
   return {
-    id = section .. "\0file.txt",
+    id = section .. "\0" .. path,
     section = section,
     status = "M",
-    path = "file.txt",
+    path = path,
   }
 end
 
@@ -55,13 +56,15 @@ local function default_hunk(change_model)
   })
 end
 
-local function with_controller(section, body)
+local function with_controller(section, body, opts)
+  opts = opts or {}
   local previous_controller = package.loaded["vigit.ui.controller"]
   local previous_renderer = package.loaded["vigit.ui.renderer"]
   local previous_layout = package.loaded["vigit.ui.layout"]
   local previous_diff_view = package.loaded["vigit.ui.views.diff"]
   local original_api = {
     current_win = vim.api.nvim_get_current_win,
+    set_current_win = vim.api.nvim_set_current_win,
     win_is_valid = vim.api.nvim_win_is_valid,
     win_get_cursor = vim.api.nvim_win_get_cursor,
     win_set_cursor = vim.api.nvim_win_set_cursor,
@@ -103,6 +106,7 @@ local function with_controller(section, body)
       },
     },
   }
+  local current_window = session.owned.diff_win
 
   package.loaded["vigit.ui.renderer"] = {
     target_at = function(buffer, row)
@@ -133,7 +137,10 @@ local function with_controller(section, body)
   }
   package.loaded["vigit.ui.controller"] = nil
   vim.api.nvim_get_current_win = function()
-    return session.owned.diff_win
+    return current_window
+  end
+  vim.api.nvim_set_current_win = function(window)
+    current_window = window
   end
   vim.api.nvim_win_is_valid = function(window)
     return window ~= nil
@@ -170,9 +177,14 @@ local function with_controller(section, body)
   local method = section == "staged" and "unstage_hunk" or "stage_hunk"
   git[method] = function(_, _, file_diff, selected, done)
     mutations[#mutations + 1] = { file_diff = file_diff, hunk = selected }
-    session.data.status = section == "staged"
-      and status({}, { other })
-      or status({ other }, {})
+    session.data.status = opts.after_status
+      and opts.after_status(current, other)
+      or (section == "staged"
+        and status({}, { other })
+        or status({ other }, {}))
+    if opts.steal_focus then
+      current_window = "background-win"
+    end
     done(Result.ok(true))
   end
   local changes = {
@@ -196,10 +208,13 @@ local function with_controller(section, body)
       mutations = mutations,
       default_diff = default_diff,
       default_hunk = default,
+      session = session,
+      current_window = function() return current_window end,
     })
   end, debug.traceback)
 
   vim.api.nvim_get_current_win = original_api.current_win
+  vim.api.nvim_set_current_win = original_api.set_current_win
   vim.api.nvim_win_is_valid = original_api.win_is_valid
   vim.api.nvim_win_get_cursor = original_api.win_get_cursor
   vim.api.nvim_win_set_cursor = original_api.win_set_cursor
@@ -223,6 +238,32 @@ it("toggle_hunk_index stages one default-context hunk from expanded clusters", f
     assert_equal(harness.mutations[1].hunk, harness.default_hunk)
     assert_equal(#harness.mutations[1].hunk.lines, 2)
   end)
+end)
+
+it("toggle_hunk_index keeps a partially staged file selected in unstaged", function()
+  with_controller("unstaged", function(harness)
+    assert_equal(harness.session.view.selected_change_id, "unstaged\0file.txt")
+  end, {
+    after_status = function(_, staged)
+      return status({ staged }, { change("unstaged", "file.txt") })
+    end,
+  })
+end)
+
+it("toggle_hunk_index selects the next unstaged file instead of the staged copy", function()
+  with_controller("unstaged", function(harness)
+    assert_equal(harness.session.view.selected_change_id, "unstaged\0next.txt")
+  end, {
+    after_status = function(_, staged)
+      return status({ staged }, { change("unstaged", "next.txt") })
+    end,
+  })
+end)
+
+it("toggle_hunk_index restores the diff pane after an asynchronous redraw", function()
+  with_controller("unstaged", function(harness)
+    assert_equal(harness.current_window(), harness.session.owned.diff_win)
+  end, { steal_focus = true })
 end)
 
 it("toggle_hunk_index unstages one default-context hunk from expanded clusters", function()

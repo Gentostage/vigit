@@ -156,20 +156,31 @@ function M.open_editor(session, reviews, opts)
   session.owned.comment_editor_buf, session.owned.comment_editor_win = buffer, window
   session.owned.comment_editor_id = requested_id
   vim.api.nvim_buf_set_name(buffer, "vigit://" .. session.id .. "/comment-editor")
+  vim.bo[buffer].buftype = "acwrite"
   vim.bo[buffer].filetype = "markdown"
   local comment = opts.comment
   vim.api.nvim_buf_set_lines(buffer, 0, -1, false, vim.split(comment and comment.body or "", "\n", { plain = true }))
   vim.bo[buffer].modified = false
+
+  local function clear_ownership()
+    if session.owned.comment_editor_win == window then
+      session.owned.comment_editor_win = nil
+      session.owned.comment_editor_buf = nil
+      session.owned.comment_editor_id = nil
+    end
+  end
 
   local function close(force)
     if not valid(window) then return end
     if not force and vim.bo[buffer].modified then
       confirm.ask("Discard unsaved Vigit comment?", function(accepted)
         if accepted and valid(window) then vim.api.nvim_win_close(window, true) end
+        if accepted then clear_ownership() end
       end)
       return
     end
     vim.api.nvim_win_close(window, true)
+    clear_ownership()
   end
 
   local function save()
@@ -195,13 +206,13 @@ function M.open_editor(session, reviews, opts)
       require("vigit.ui.controller").dispatch(session, "open_worktrees")
     end,
   })
+  vim.api.nvim_create_autocmd("BufWriteCmd", {
+    buffer = buffer,
+    callback = save,
+  })
   vim.api.nvim_create_autocmd("BufWipeout", {
     buffer = buffer, once = true,
-    callback = function()
-      if session.owned.comment_editor_buf == buffer then
-        session.owned.comment_editor_win, session.owned.comment_editor_buf, session.owned.comment_editor_id = nil, nil, nil
-      end
-    end,
+    callback = clear_ownership,
   })
   return { buf = buffer, win = window }
 end

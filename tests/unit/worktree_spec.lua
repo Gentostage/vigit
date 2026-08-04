@@ -210,7 +210,18 @@ it("returns removal blocker codes in the required priority", function()
   entry.prunable = nil
   assert_equal(worktree.removal_blocker(entry, { "/projects/root/src/a.lua" }), "dirty")
   entry.status = { staged = 0, unstaged = 0, untracked = 0 }
-  assert_equal(worktree.removal_blocker(entry, { "/projects/root/src/a.lua" }), "no_upstream")
+  entry.probes = {
+    upstream = {
+      state = "error",
+      error = { code = "git_upstream_failed" },
+    },
+  }
+  assert_equal(
+    worktree.removal_blocker(entry, {}),
+    nil
+  )
+  entry.probes = nil
+  assert_equal(worktree.removal_blocker(entry, {}), nil)
   entry.upstream = { state = "tracking", source = "local_refs", ahead = 2, behind = 0 }
   assert_equal(worktree.removal_blocker(entry, { "/projects/root/src/a.lua" }), "ahead")
   entry.upstream.ahead = 0

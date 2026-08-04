@@ -35,6 +35,7 @@ local function with_controller(body)
   local previous_diff_view = package.loaded["vigit.ui.views.diff"]
   local original_api = {
     current_win = vim.api.nvim_get_current_win,
+    set_current_win = vim.api.nvim_set_current_win,
     win_is_valid = vim.api.nvim_win_is_valid,
     win_get_cursor = vim.api.nvim_win_get_cursor,
     win_set_cursor = vim.api.nvim_win_set_cursor,
@@ -111,6 +112,9 @@ local function with_controller(body)
   vim.api.nvim_get_current_win = function()
     return current_win
   end
+  vim.api.nvim_set_current_win = function(window)
+    current_win = window
+  end
   vim.api.nvim_win_is_valid = function(window)
     return window ~= nil
   end
@@ -175,6 +179,12 @@ local function with_controller(body)
       set_current = function(session, view)
         current_win = view == "diff" and session.owned.diff_win or session.owned.changes_win
       end,
+      set_raw_current = function(window)
+        current_win = window
+      end,
+      current = function()
+        return current_win
+      end,
       renders = function()
         return renders
       end,
@@ -185,6 +195,7 @@ local function with_controller(body)
   end, debug.traceback)
 
   vim.api.nvim_get_current_win = original_api.current_win
+  vim.api.nvim_set_current_win = original_api.set_current_win
   vim.api.nvim_win_is_valid = original_api.win_is_valid
   vim.api.nvim_win_get_cursor = original_api.win_get_cursor
   vim.api.nvim_win_set_cursor = original_api.win_set_cursor
@@ -230,6 +241,27 @@ it("toggle_file_index chooses stage and unstage and restores the closest anchor"
     controller.dispatch(session, "toggle_file_index")
     assert_equal(calls[2], "unstage:file.txt")
     assert_equal(session.view.selected_change_id, "unstaged\0file.txt")
+  end)
+end)
+
+it("toggle_file_index restores the owned pane after an asynchronous redraw", function()
+  with_controller(function(harness)
+    local unstaged = change("unstaged", "file.txt")
+    local session = new_session("focus", {}, { unstaged })
+    local git = {
+      stage_file = function(_, _, _, done)
+        session.data.status = status({ change("staged", "file.txt") }, {})
+        harness.set_raw_current("background-win")
+        done(Result.ok(true))
+      end,
+    }
+    local controller = harness.setup(git)
+    harness.set_target(session, unstaged)
+    harness.set_current(session, "changes")
+
+    controller.dispatch(session, "toggle_file_index")
+
+    assert_equal(harness.current(), session.owned.changes_win)
   end)
 end)
 

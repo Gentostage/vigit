@@ -77,6 +77,40 @@ local function rendered_text(session)
   return table.concat(vim.api.nvim_buf_get_lines(session.owned.diff_buf, 0, -1, false), "\n")
 end
 
+it("saves a comment with the native write command", function()
+  local repo = Fixture.new()
+  local session
+  local ok, message = xpcall(function()
+    repo:write("src/service.lua", { "local value = 1", "return value" })
+    repo:git({ "add", "--", "src/service.lua" })
+    repo:commit("initial")
+    repo:write("src/service.lua", { "local value = 1", "return changed" })
+
+    session = assert(v2.open({ cwd = repo.root }))
+    assert_truthy(vim.wait(2000, function() return first_change(session) ~= nil end, 10))
+    controller.dispatch(session, { name = "select_change", change_id = first_change(session).id })
+    assert_truthy(vim.wait(2000, function() return changed_row(session) ~= nil end, 10))
+    vim.api.nvim_set_current_win(session.owned.diff_win)
+    vim.api.nvim_win_set_cursor(session.owned.diff_win, { changed_row(session), 0 })
+    controller.dispatch(session, "add_comment")
+
+    local buffer = assert(session.owned.comment_editor_buf)
+    vim.api.nvim_buf_set_lines(buffer, 0, -1, false, {
+      "Save this comment with :w.",
+    })
+    vim.api.nvim_buf_call(buffer, function() vim.cmd("write") end)
+
+    assert_equal(session.data.comments[1].body, "Save this comment with :w.")
+    assert_truthy(vim.wait(1000, function()
+      return session.owned.comment_editor_win == nil
+    end, 10))
+  end, debug.traceback)
+
+  close(session)
+  repo:cleanup()
+  if not ok then error(message, 0) end
+end)
+
 it("keeps comment interaction in owned vigit buffers and updates marker previews", function()
   local repo = Fixture.new()
   local session

@@ -184,11 +184,12 @@ function M.removal_blocker(entry, loaded_paths, platform)
   if entry.prunable then return "prunable" end
   if changed_count(entry) > 0 then return "dirty" end
   local upstream = entry.upstream
-  if type(upstream) ~= "table" or upstream.state ~= "tracking"
-      or upstream.source ~= "local_refs" then
-    return "no_upstream"
+  if type(upstream) == "table"
+      and upstream.state == "tracking"
+      and upstream.source == "local_refs"
+      and (tonumber(upstream.ahead) or 0) > 0 then
+    return "ahead"
   end
-  if (tonumber(upstream.ahead) or 0) > 0 then return "ahead" end
   if loaded_within(entry.path, loaded_paths, platform) then return "loaded_source_buffer" end
   return nil
 end

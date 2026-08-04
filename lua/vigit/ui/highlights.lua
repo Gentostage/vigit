@@ -102,6 +102,7 @@ function M.setup()
   set_link("VigitChangesModified", "DiagnosticWarn")
   set_link("VigitChangesUntracked", "DiagnosticInfo")
   set_link("VigitChangesConflict", "DiagnosticError")
+  set_link("VigitChangesSelected", "Visual")
 end
 
 local function add_line_layer(buffer, namespace, row, kind)

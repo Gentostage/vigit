@@ -35,7 +35,7 @@ local entries = {
   { id = "comments.edit", modes = { "n" }, lhs = "e", contexts = { "comments" }, group = "comments", description = "Edit selected comment", intent = "edit_comment" },
   { id = "comments.delete", modes = { "n" }, lhs = "d", contexts = { "comments" }, group = "comments", description = "Delete selected comment (y/N)", intent = "delete_comment" },
   { id = "comments.close", modes = { "n" }, lhs = "q", contexts = { "comments", "prompt" }, group = "lifecycle", description = "Close Vigit popup", intent = "close" },
-  { id = "comment_editor.save", modes = { "n", "i" }, lhs = "<C-s>", contexts = { "comment_editor" }, group = "comments", description = "Save comment", intent = "save_comment" },
+  { id = "comment_editor.save", modes = { "n", "i" }, lhs = "<C-s>", contexts = { "comment_editor" }, group = "comments", description = "Save comment (:w also)", intent = "save_comment" },
   { id = "comment_editor.close", modes = { "n" }, lhs = "q", contexts = { "comment_editor" }, group = "lifecycle", description = "Close comment editor", intent = "close" },
   { id = "comment_editor.escape", modes = { "n" }, lhs = "<Esc>", contexts = { "comment_editor" }, group = "lifecycle", description = "Close comment editor", intent = "close" },
   { id = "session.close", modes = { "n" }, lhs = "q", contexts = { "diff", "changes" }, group = "lifecycle", description = "Return to code mode", intent = "close" },

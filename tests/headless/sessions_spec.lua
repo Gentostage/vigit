@@ -727,6 +727,53 @@ it("renders every tree directory with semantic status and icon highlights", func
   )
 end)
 
+it("highlights only the selected change row in the changes tree", function()
+  local selected_id = "unstaged\0src/selected.lua"
+  local output = changes_view.render({
+    view = {
+      changes_mode = "tree",
+      selected_change_id = selected_id,
+    },
+    data = {
+      status = {
+        staged = {},
+        unstaged = {
+          {
+            id = selected_id,
+            section = "unstaged",
+            status = "M",
+            path = "src/selected.lua",
+          },
+          {
+            id = "unstaged\0src/other.lua",
+            section = "unstaged",
+            status = "M",
+            path = "src/other.lua",
+          },
+        },
+      },
+    },
+  }, 40)
+
+  local selected
+  for _, highlight in ipairs(output.highlights) do
+    if highlight.group == "VigitChangesSelected" then
+      assert_equal(selected, nil)
+      selected = highlight
+    end
+  end
+  assert_truthy(selected)
+  assert_equal(selected.start_col, nil)
+  assert_equal(selected.end_col, nil)
+  assert_equal(output.lines[selected.row]:find("selected.lua", 1, true) ~= nil, true)
+  local target
+  for _, candidate in ipairs(output.targets) do
+    if candidate.row == selected.row then target = candidate end
+  end
+  assert_equal(target.kind, "change")
+  assert_equal(target.change_id, selected_id)
+end)
+
 it("applies hierarchical tree highlight spans to the changes buffer", function()
   local repo = Fixture.new()
   local session

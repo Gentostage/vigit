@@ -1,11 +1,29 @@
 local Fixture = require("tests.fixtures.git_repo")
 local v2 = require("vigit.v2")
 local controller = require("vigit.ui.controller")
+local layout = require("vigit.ui.layout")
 
 local function close_session(session)
   if session and not session.closed then
     controller.dispatch(session, "abandon")
   end
+end
+
+local function select_worktree(picker, path)
+  local canonical = assert(vim.uv.fs_realpath(path))
+  assert_truthy(vim.wait(2000, function()
+    return picker.row_by_path[canonical] ~= nil
+  end, 10))
+  vim.api.nvim_win_set_cursor(picker.win, {
+    picker.row_by_path[canonical],
+    0,
+  })
+  picker:select()
+  assert_truthy(vim.wait(2000, function()
+    local session = v2.active_session()
+    return picker.closed and session and session.root == canonical
+  end, 10))
+  return v2.active_session()
 end
 
 it("открывает picker worktree, различает ROOT и WT и фокусирует существующую сессию", function()
@@ -64,6 +82,109 @@ it("открывает picker worktree, различает ROOT и WT и фок�
 
   close_session(linked_session)
   close_session(root_session)
+  vim.fn.delete(linked, "rf")
+  repo:cleanup()
+  if not ok then error(message, 0) end
+end)
+
+it("сохраняет editor mode и последний buffer при выборе worktree через W", function()
+  local repo = Fixture.new()
+  local linked = vim.fn.tempname()
+  local root_session
+  local linked_session
+  local buffers = {}
+  local ok, message = xpcall(function()
+    repo:write("README.md", { "fixture" })
+    repo:git({ "add", "README.md" })
+    repo:commit("initial")
+    repo:git({ "worktree", "add", "-q", "-b", "linked-code", linked })
+
+    root_session = assert(v2.open({ cwd = repo.root }))
+    controller.dispatch(root_session, "close")
+    vim.cmd("edit " .. vim.fn.fnameescape(repo.root .. "/README.md"))
+    local root_buffer = vim.api.nvim_get_current_buf()
+    buffers[#buffers + 1] = root_buffer
+
+    linked_session = select_worktree(
+      assert(v2.worktrees({ session = root_session })),
+      linked
+    )
+    assert_equal(linked_session.workspace:mode_name(), "code")
+    assert_equal(layout.is_visible(linked_session), false)
+    assert_equal(vim.fn.getcwd(0, 0), assert(vim.uv.fs_realpath(linked)))
+    assert_equal(vim.api.nvim_buf_get_name(0), "")
+    buffers[#buffers + 1] = vim.api.nvim_get_current_buf()
+
+    vim.cmd("edit " .. vim.fn.fnameescape(linked .. "/README.md"))
+    local linked_buffer = vim.api.nvim_get_current_buf()
+    buffers[#buffers + 1] = linked_buffer
+
+    root_session = select_worktree(
+      assert(v2.worktrees({ session = linked_session })),
+      repo.root
+    )
+    assert_equal(root_session.workspace:mode_name(), "code")
+    assert_equal(vim.api.nvim_get_current_buf(), root_buffer)
+
+    linked_session = select_worktree(
+      assert(v2.worktrees({ session = root_session })),
+      linked
+    )
+    assert_equal(linked_session.workspace:mode_name(), "code")
+    assert_equal(vim.api.nvim_get_current_buf(), linked_buffer)
+  end, debug.traceback)
+
+  close_session(linked_session)
+  close_session(root_session)
+  for _, buffer in ipairs(buffers) do
+    if vim.api.nvim_buf_is_valid(buffer) then
+      pcall(vim.api.nvim_buf_delete, buffer, { force = true })
+    end
+  end
+  vim.fn.delete(linked, "rf")
+  repo:cleanup()
+  if not ok then error(message, 0) end
+end)
+
+it("в code mode открывает W на worktree текущего source buffer", function()
+  local repo = Fixture.new()
+  local linked = vim.fn.tempname()
+  local root_session
+  local linked_session
+  local source_buffer
+  local picker
+  local ok, message = xpcall(function()
+    repo:write("README.md", { "fixture" })
+    repo:git({ "add", "README.md" })
+    repo:commit("initial")
+    repo:git({ "worktree", "add", "-q", "-b", "linked-picker-root", linked })
+
+    root_session = assert(v2.open({ cwd = repo.root }))
+    controller.dispatch(root_session, "close")
+    vim.cmd("edit " .. vim.fn.fnameescape(linked .. "/README.md"))
+    source_buffer = vim.api.nvim_get_current_buf()
+
+    picker = assert(v2.worktrees({ session = root_session }))
+    local linked_root = assert(vim.uv.fs_realpath(linked))
+    assert_truthy(vim.wait(2000, function()
+      return picker.row_by_path[linked_root] ~= nil
+    end, 10))
+    assert_equal(picker.selected_path, linked_root)
+    assert_equal(
+      vim.api.nvim_win_get_cursor(picker.win)[1],
+      picker.row_by_path[linked_root]
+    )
+    linked_session = select_worktree(picker, linked)
+    assert_equal(linked_session.workspace:mode_name(), "code")
+    assert_equal(vim.api.nvim_get_current_buf(), source_buffer)
+  end, debug.traceback)
+
+  if picker and not picker.closed then picker:close() end
+  close_session(linked_session)
+  close_session(root_session)
+  if source_buffer and vim.api.nvim_buf_is_valid(source_buffer) then
+    pcall(vim.api.nvim_buf_delete, source_buffer, { force = true })
+  end
   vim.fn.delete(linked, "rf")
   repo:cleanup()
   if not ok then error(message, 0) end
