@@ -39,6 +39,19 @@ local function cancel_job(job)
   end
 end
 
+local function same_snapshot(left, right)
+  if type(left) ~= type(right) then return false end
+  if type(left) ~= "table" then return left == right end
+
+  for key, value in pairs(left) do
+    if not same_snapshot(value, right[key]) then return false end
+  end
+  for key in pairs(right) do
+    if left[key] == nil then return false end
+  end
+  return true
+end
+
 local function ensure_errors(session)
   session.errors = session.errors or {}
   session.errors.diffs = session.errors.diffs or {}
@@ -171,6 +184,27 @@ function Changes:current(session, generation)
   return not session.closed and session.reads.generation == generation
 end
 
+function Changes:probe(session, on_complete)
+  if session.closed then return end
+
+  cancel_job(session.reads.jobs.poll)
+  local request = {}
+  session.reads.jobs.poll = request
+  local handle = self.git:status(session.root, function(result)
+    if session.closed or session.reads.jobs.poll ~= request then return end
+
+    session.reads.jobs.poll = nil
+    on_complete({
+      changed = result.ok
+        and not same_snapshot(session.data.status, result.value),
+      result = result,
+    })
+  end)
+  if session.reads.jobs.poll == request then
+    request.handle = handle
+  end
+end
+
 function Changes:load_diff(
     session,
     change_id,
@@ -285,6 +319,8 @@ function Changes:refresh(session, on_complete)
   end
   session.view.expanded_context = copy_context(applied_context(session))
 
+  cancel_job(session.reads.jobs.poll)
+  session.reads.jobs.poll = nil
   cancel_job(session.reads.jobs.status)
   session.reads.jobs.status = nil
   clear_pending_diffs(session)

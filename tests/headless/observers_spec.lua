@@ -117,12 +117,15 @@ it("installs one observer group without touching source state and refreshes only
   if not ok then error(message, 0) end
 end)
 
-it("polls only a visible idle review in the current workspace tab", function()
+it("polls a visible review silently and refreshes only after Git changes", function()
   local repo = Fixture.new()
   local session
   local external_tab
   local plugin = require("vigit")
   local ok, message = xpcall(function()
+    repo:write("tracked.lua", { "return 'old'" })
+    repo:git({ "add", "--", "tracked.lua" })
+    repo:commit("initial")
     assert_equal(plugin.setup({ refresh = {
       debounce_ms = 5,
       on_write = false,
@@ -134,10 +137,22 @@ it("polls only a visible idle review in the current workspace tab", function()
     wait_idle(session)
 
     local before = session.reads.generation
+    vim.wait(100)
+    assert_equal(session.reads.generation, before)
+    assert_equal(session.busy.status, nil)
+
+    repo:write("tracked.lua", { "return 'changed'" })
     assert_truthy(vim.wait(1000, function()
-      return session.reads.generation > before
+      local unstaged = session.data.status
+        and session.data.status.unstaged or {}
+      return session.reads.generation == before + 1
+        and unstaged[1]
+        and unstaged[1].path == "tracked.lua"
+        and session.busy.status == nil
     end, 10))
-    wait_idle(session)
+    local changed_generation = session.reads.generation
+    vim.wait(100)
+    assert_equal(session.reads.generation, changed_generation)
 
     session.busy.status = { cancel = function() end }
     before = session.reads.generation

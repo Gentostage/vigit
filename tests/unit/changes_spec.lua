@@ -56,6 +56,74 @@ local function change(id)
   }
 end
 
+it("проверяет неизменный status без generation, busy и UI notification", function()
+  local fake = fake_git()
+  local notifications = 0
+  local changes = Changes.new({
+    git = fake,
+    on_change = function()
+      notifications = notifications + 1
+    end,
+  })
+  local session = Session.new({ id = "probe-equal", root = "/repo" })
+  local current = status(change("unstaged\0src/a.lua"))
+  session.data.status = current
+  local generation = session.reads.generation
+  local completed
+
+  changes:probe(session, function(event)
+    completed = event
+  end)
+  fake.status_callbacks[1](Result.ok(status(change("unstaged\0src/a.lua"))))
+
+  assert_equal(completed.changed, false)
+  assert_equal(completed.result.ok, true)
+  assert_equal(session.reads.generation, generation)
+  assert_equal(session.busy.status, nil)
+  assert_equal(session.reads.jobs.poll, nil)
+  assert_equal(notifications, 0)
+end)
+
+it("сообщает об изменившемся status без обновления видимой сессии", function()
+  local fake = fake_git()
+  local changes = Changes.new({ git = fake })
+  local session = Session.new({ id = "probe-changed", root = "/repo" })
+  session.data.status = status()
+  local completed
+
+  changes:probe(session, function(event)
+    completed = event
+  end)
+  fake.status_callbacks[1](Result.ok(status(change("unstaged\0src/a.lua"))))
+
+  assert_equal(completed.changed, true)
+  assert_equal(completed.result.ok, true)
+  assert_equal(session.data.status.unstaged[1], nil)
+  assert_equal(session.reads.generation, 0)
+  assert_equal(session.busy.status, nil)
+end)
+
+it("игнорирует завершение заменённого status probe", function()
+  local fake = fake_git()
+  local changes = Changes.new({ git = fake })
+  local session = Session.new({ id = "probe-stale", root = "/repo" })
+  session.data.status = status()
+  local completions = 0
+
+  changes:probe(session, function()
+    completions = completions + 1
+  end)
+  changes:probe(session, function()
+    completions = completions + 1
+  end)
+
+  assert_equal(fake.status_handles[1].cancelled, 1)
+  fake.status_callbacks[1](Result.ok(status(change("unstaged\0src/a.lua"))))
+  assert_equal(completions, 0)
+  fake.status_callbacks[2](Result.ok(status()))
+  assert_equal(completions, 1)
+end)
+
 it("игнорирует устаревшее завершение обновления статуса", function()
   local fake = fake_git()
   local changes = Changes.new({ git = fake })

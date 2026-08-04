@@ -95,6 +95,7 @@ local function polling_session()
   if not session
       or session.closed
       or session.busy.status
+      or session.reads.jobs.poll
       or not session.owned.tab
       or not vim.api.nvim_tabpage_is_valid(session.owned.tab)
       or vim.api.nvim_get_current_tabpage() ~= session.owned.tab
@@ -113,7 +114,12 @@ local function start_refresh_timer()
   timer:start(interval, interval, vim.schedule_wrap(function()
     if refresh_timer ~= timer then return end
     local session = polling_session()
-    if session then request_refresh(session) end
+    if not session then return end
+
+    changes:probe(session, function(event)
+      if not event.result.ok or not event.changed then return end
+      if polling_session() == session then request_refresh(session) end
+    end)
   end))
 end
 
