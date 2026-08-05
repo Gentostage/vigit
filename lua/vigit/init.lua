@@ -363,6 +363,15 @@ worktrees = Worktrees.new({
       open_error
     )
   end,
+  stop_terminal = function()
+    if not workspace then
+      return Result.err(
+        "workspace_unavailable",
+        "Vigit workspace is unavailable"
+      )
+    end
+    return neovim.stop_workspace_terminal(workspace)
+  end,
   active_root = function()
     return workspace and workspace.root or nil
   end,

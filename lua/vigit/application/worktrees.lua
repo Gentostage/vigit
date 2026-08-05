@@ -117,6 +117,7 @@ function M.new(opts)
     neovim = opts.neovim,
     concurrency = math.max(1, math.min(4, tonumber(opts.concurrency) or 4)),
     switch_session = opts.switch_session,
+    stop_terminal = opts.stop_terminal,
     active_root = opts.active_root,
     on_update = opts.on_update,
     confirm = opts.confirm or confirm_worktree,
@@ -581,10 +582,15 @@ function Worktrees:open(entry, callback, opts)
   end
   local cancelled = false
   local resolver_handle
+  local confirmation_handle
   local function cancel()
     if cancelled then return end
     cancelled = true
     if resolver_handle and resolver_handle.cancel then pcall(resolver_handle.cancel) end
+    if type(confirmation_handle) == "table"
+        and type(confirmation_handle.cancel) == "function" then
+      pcall(confirmation_handle.cancel)
+    end
   end
   resolver_handle = resolver(entry.path, once(function(root_result)
     if cancelled then return end
@@ -603,12 +609,61 @@ function Worktrees:open(entry, callback, opts)
       done(Result.err("worktree_open_unavailable", "Worktree switcher is unavailable"))
       return
     end
-    local switched = self.switch_session(root, opts or {})
-    if not Result.is(switched) then
-      done(Result.err("worktree_open_failed", "Unable to switch Vigit worktree", switched))
-      return
+    local function switch()
+      local switched = self.switch_session(root, opts or {})
+      if not Result.is(switched) then
+        done(Result.err(
+          "worktree_open_failed",
+          "Unable to switch Vigit worktree",
+          switched
+        ))
+        return
+      end
+      if switched.ok
+          or switched.error.code ~= "running_terminal"
+          or type(self.stop_terminal) ~= "function" then
+        done(switched)
+        return
+      end
+
+      confirmation_handle = self.confirm(
+        "Stop Vigit terminal and switch worktree?",
+        once(function(accepted)
+          if cancelled then return end
+          if accepted ~= true then
+            done(Result.err(
+              "confirmation_cancelled",
+              "Worktree switch was cancelled; terminal is still running"
+            ))
+            return
+          end
+          local stopped = self.stop_terminal()
+          if not Result.is(stopped) then
+            done(Result.err(
+              "terminal_stop_failed",
+              "Unable to stop the Vigit terminal",
+              stopped
+            ))
+            return
+          end
+          if not stopped.ok then
+            done(stopped)
+            return
+          end
+          local retried = self.switch_session(root, opts or {})
+          if not Result.is(retried) then
+            done(Result.err(
+              "worktree_open_failed",
+              "Unable to switch Vigit worktree",
+              retried
+            ))
+            return
+          end
+          done(retried)
+        end)
+      )
     end
-    done(switched)
+    switch()
   end))
   return { cancel = cancel }
 end

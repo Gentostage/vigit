@@ -456,6 +456,23 @@ local function running_job(job)
   return ok and statuses[1] == -1
 end
 
+local function visible_buffer_window(tab, buffer)
+  if not tab or not vim.api.nvim_tabpage_is_valid(tab) then return nil end
+  for _, window in ipairs(vim.api.nvim_tabpage_list_wins(tab)) do
+    if vim.api.nvim_win_is_valid(window)
+        and vim.api.nvim_win_get_buf(window) == buffer then
+      return window
+    end
+  end
+end
+
+local function active_workspace_session(workspace)
+  if type(workspace) ~= "table" then return nil end
+  return type(workspace.active_session) == "function"
+      and workspace:active_session()
+    or workspace.session
+end
+
 function M.inspect_workspace(workspace)
   if type(workspace) ~= "table" then
     return Result.err(
@@ -503,6 +520,66 @@ function M.inspect_workspace(workspace)
       "Exit the workspace terminal before switching worktree"
     )
   end
+  return Result.ok(true)
+end
+
+function M.stop_workspace_terminal(workspace)
+  local session = active_workspace_session(workspace)
+  local resources = session and session.resources
+  local terminal = resources and resources.terminal
+  if not terminal then return Result.ok(false) end
+
+  if running_job(terminal.job) then
+    local ok, stopped = pcall(vim.fn.jobstop, terminal.job)
+    if not ok or stopped ~= 1 then
+      return Result.err(
+        "terminal_stop_failed",
+        "Unable to stop the Vigit terminal",
+        stopped
+      )
+    end
+    local waited_ok, statuses = pcall(vim.fn.jobwait, { terminal.job }, 1000)
+    if not waited_ok or statuses[1] == -1 then
+      return Result.err(
+        "terminal_stop_failed",
+        "Vigit terminal did not stop in time",
+        statuses
+      )
+    end
+  end
+
+  if terminal.win and vim.api.nvim_win_is_valid(terminal.win) then
+    local window_buffer = vim.api.nvim_win_get_buf(terminal.win)
+    if window_buffer == terminal.buf then
+      local closed, close_error = pcall(
+        vim.api.nvim_win_close,
+        terminal.win,
+        true
+      )
+      if not closed then
+        return Result.err(
+          "terminal_close_failed",
+          "Unable to close the Vigit terminal window",
+          close_error
+        )
+      end
+    end
+  end
+  if terminal.buf and vim.api.nvim_buf_is_valid(terminal.buf) then
+    local deleted, delete_error = pcall(
+      vim.api.nvim_buf_delete,
+      terminal.buf,
+      { force = true }
+    )
+    if not deleted then
+      return Result.err(
+        "terminal_close_failed",
+        "Unable to delete the Vigit terminal buffer",
+        delete_error
+      )
+    end
+  end
+  resources.terminal = nil
   return Result.ok(true)
 end
 
@@ -743,6 +820,33 @@ function M.open_terminal(context, done)
     tab = workspace.tab
     vim.api.nvim_set_current_tabpage(tab)
     vim.api.nvim_set_current_win(code_window)
+
+    local existing = resources.terminal
+    if existing
+        and existing.buf
+        and vim.api.nvim_buf_is_valid(existing.buf)
+        and running_job(existing.job) then
+      window = visible_buffer_window(tab, existing.buf)
+      if window then
+        vim.api.nvim_set_current_win(window)
+      else
+        vim.cmd("botright sbuffer " .. existing.buf)
+        window = vim.api.nvim_get_current_win()
+      end
+      existing.tab = tab
+      existing.win = window
+      vim.cmd("startinsert")
+      result = Result.ok(existing)
+      return
+    end
+
+    if existing then
+      if existing.buf and vim.api.nvim_buf_is_valid(existing.buf) then
+        pcall(vim.api.nvim_buf_delete, existing.buf, { force = true })
+      end
+      resources.terminal = nil
+    end
+
     vim.cmd("botright new")
     window = vim.api.nvim_get_current_win()
     buffer = vim.api.nvim_get_current_buf()

@@ -1,5 +1,6 @@
 local keymaps = require("vigit.ui.keymaps")
 local log = require("vigit.ui.log")
+local highlights = require("vigit.ui.highlights")
 
 local M = {}
 local active_picker
@@ -446,6 +447,7 @@ local function geometry()
 end
 
 function M.open(opts)
+  highlights.setup()
   local app = assert(opts.app)
   local origin = assert(opts.origin)
   if active_picker and not active_picker.closed

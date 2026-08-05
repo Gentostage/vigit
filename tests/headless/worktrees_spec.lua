@@ -51,6 +51,32 @@ local function select_worktree(picker, path)
   return v2.active_session()
 end
 
+it("инициализирует highlight-группы при первом открытии picker", function()
+  local view = require("vigit.ui.views.worktrees")
+  local group = "VigitWorktreeBranch"
+  vim.api.nvim_set_hl(0, group, { default = true, link = "Identifier" })
+  vim.api.nvim_set_hl(0, group, {})
+  local picker
+  local app = {
+    set_on_update = function() end,
+    list = function()
+      return { cancel = function() end }
+    end,
+    dispose = function() end,
+  }
+
+  local ok, message = xpcall(function()
+    picker = assert(view.open({
+      app = app,
+      origin = { root = vim.fn.getcwd(), closed = false },
+    }))
+    local definition = vim.api.nvim_get_hl(0, { name = group, link = true })
+    assert_equal(definition.link, "String")
+  end, debug.traceback)
+  if picker then picker:close() end
+  if not ok then error(message, 0) end
+end)
+
 it("открывает picker worktree, различает ROOT и WT и фокусирует существующую сессию", function()
   local repo = Fixture.new()
   local linked = vim.fn.tempname()

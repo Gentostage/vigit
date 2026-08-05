@@ -128,11 +128,16 @@ a time. Switching worktrees does not create more Neovim tabs.
 
 - `e` opens the selected source file in the current editor workspace;
 - `gd` opens the source position and invokes the standard LSP definition;
-- `T` opens a terminal split rooted in the active worktree.
+- `T` opens a terminal split rooted in the active worktree, or focuses the
+  existing Vigit terminal if its window was closed with `:q`.
 
 Vigit does not add its own mappings, options, winbar, or lifecycle autocmds to
 source and terminal buffers. Run `:Vigit` to restore the review at its previous
 diff anchor. Press `q` inside Vigit to hide the review and return to code mode.
+Neovim's `:q` closes only the terminal window; the hidden terminal buffer and
+shell keep running. When switching worktrees, Vigit detects that exact terminal
+and asks `Stop Vigit terminal and switch worktree? (y/N)` before stopping it.
+Other terminal buffers are never affected.
 
 ## Essential keymaps
 
@@ -147,7 +152,7 @@ diff anchor. Press `q` inside Vigit to hide the review and return to code mode.
 | `f` | Expand/collapse full context |
 | `e` | Open the source file |
 | `gd` | Go to the LSP definition |
-| `T` | Open a terminal in the worktree |
+| `T` | Open or focus the Vigit terminal in the worktree |
 | `s` | Stage/unstage the current file |
 | `S` | Stage/unstage the current hunk |
 | `x` | Restore an unstaged hunk after `y/N` |
@@ -207,7 +212,8 @@ never hidden; press `F` to fetch explicitly.
 - the repeated preflight after `y` returns the same safe result.
 
 Vigit removes only the inactive cached session, keeps the Git branch, and never
-closes user-owned source buffers or terminal splits.
+closes source buffers or unrelated terminal splits. A running Vigit terminal is
+stopped only after the explicit worktree-switch confirmation described above.
 
 ## Quick demo
 

@@ -360,7 +360,7 @@ it("открывает source buffer в editor window того же workspace ta
   end
 end)
 
-it("открывает terminal split внутри workspace tab", function()
+it("повторный T фокусирует существующий workspace terminal", function()
   local repo = Fixture.new()
   local session
   local initial_tab = vim.api.nvim_get_current_tabpage()
@@ -406,6 +406,20 @@ it("открывает terminal split внутри workspace tab", function()
     end
     assert_equal(vigit_autocmds, 0)
     assert_equal(session.workspace:mode_name(), "code")
+
+    local terminal = session.resources.terminal
+    vim.api.nvim_win_close(terminal.win, true)
+    assert_equal(vim.api.nvim_win_is_valid(terminal.win), false)
+    assert_equal(vim.api.nvim_buf_is_valid(terminal.buf), true)
+    assert_equal(vim.fn.jobwait({ terminal.job }, 0)[1], -1)
+
+    assert_equal(assert(v2.open({ cwd = repo.root })), session)
+    controller.dispatch(session, "open_terminal")
+
+    assert_equal(session.resources.terminal.buf, terminal.buf)
+    assert_equal(session.resources.terminal.job, terminal.job)
+    assert_equal(vim.api.nvim_get_current_buf(), terminal.buf)
+    assert_equal(normal_window_count(initial_tab), 2)
   end, debug.traceback)
 
   cleanup_terminals()
@@ -448,6 +462,14 @@ it("блокирует switch, пока workspace terminal process работа�
     assert_equal(switch_error.code, "running_terminal")
     assert_equal(v2.active_session(), session)
     assert_equal(vim.fn.jobwait({ terminal_job }, 0)[1], -1)
+
+    local stopped = neovim.stop_workspace_terminal(session.workspace)
+    assert_equal(stopped.ok, true)
+    assert_equal(session.resources.terminal, nil)
+    assert_truthy(vim.fn.jobwait({ terminal_job }, 1000)[1] ~= -1)
+
+    switched = assert(v2.open({ cwd = repo_b.root }))
+    assert_equal(switched.root, assert(vim.uv.fs_realpath(repo_b.root)))
   end, debug.traceback)
 
   cleanup_terminals()

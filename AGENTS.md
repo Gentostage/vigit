@@ -42,7 +42,9 @@ functions и variables — `snake_case`. Modules возвращают `M`, helpe
 UI mutations — controller/renderer.
 
 Source и terminal buffers принадлежат пользователю. Vigit не добавляет в них
-свои mappings, options, winbar или lifecycle autocmds и не закрывает их.
+свои mappings, options, winbar или lifecycle autocmds. Source buffers и обычные
+terminal buffers не закрываются; точный Vigit terminal можно остановить только
+после явного `y/N` при переключении worktree.
 Каждый canonical worktree имеет независимую Vigit session.
 
 ## Тестирование и PR

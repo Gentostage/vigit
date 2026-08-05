@@ -253,6 +253,95 @@ it("переключает active Vigit-сессию по каноническо
   assert_equal(switched_mode, "code")
 end)
 
+it("после y завершает Vigit terminal и повторяет switch", function()
+  local Worktrees = require("vigit.application.worktrees")
+  local switches = 0
+  local stops = 0
+  local confirmation
+  local target = { id = "target", root = "/repo/target", closed = false }
+  local app = Worktrees.new({
+    git = fake_git({}),
+    neovim = {
+      canonical_root = function(path, callback)
+        callback(Result.ok(path))
+      end,
+    },
+    switch_session = function()
+      switches = switches + 1
+      if switches == 1 then
+        return Result.err(
+          "running_terminal",
+          "Exit the workspace terminal before switching worktree"
+        )
+      end
+      return Result.ok(target)
+    end,
+    stop_terminal = function()
+      stops = stops + 1
+      return Result.ok(true)
+    end,
+    confirm = function(message, callback)
+      confirmation = message
+      callback(true)
+      return true
+    end,
+  })
+  local result
+  local callbacks = 0
+
+  local request = app:open({ path = target.root }, function(value)
+    callbacks = callbacks + 1
+    result = value
+  end)
+  request.cancel()
+
+  assert_equal(
+    confirmation,
+    "Stop Vigit terminal and switch worktree?"
+  )
+  assert_equal(stops, 1)
+  assert_equal(switches, 2)
+  assert_equal(callbacks, 1)
+  assert_equal(result.value, target)
+end)
+
+it("после No оставляет terminal запущенным и отменяет switch", function()
+  local Worktrees = require("vigit.application.worktrees")
+  local switches = 0
+  local stops = 0
+  local app = Worktrees.new({
+    git = fake_git({}),
+    neovim = {
+      canonical_root = function(path, callback)
+        callback(Result.ok(path))
+      end,
+    },
+    switch_session = function()
+      switches = switches + 1
+      return Result.err(
+        "running_terminal",
+        "Exit the workspace terminal before switching worktree"
+      )
+    end,
+    stop_terminal = function()
+      stops = stops + 1
+      return Result.ok(true)
+    end,
+    confirm = function(_, callback)
+      callback(false)
+      return false
+    end,
+  })
+  local result
+
+  app:open({ path = "/repo/target" }, function(value) result = value end)
+
+  assert_equal(stops, 0)
+  assert_equal(switches, 1)
+  assert_equal(result.ok, false)
+  assert_equal(result.error.code, "confirmation_cancelled")
+end)
+
 it("оставляет picker доступным, если worktree исчез до открытия", function()
   local Worktrees = require("vigit.application.worktrees")
   local app = Worktrees.new({

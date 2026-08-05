@@ -22,7 +22,12 @@ M.priorities = {
 }
 
 local function set_link(name, target)
-  vim.api.nvim_set_hl(0, name, { default = true, link = target })
+  local ok, existing = pcall(vim.api.nvim_get_hl, 0, {
+    name = name,
+    link = true,
+  })
+  if ok and type(existing) == "table" and next(existing) ~= nil then return end
+  vim.api.nvim_set_hl(0, name, { link = target })
 end
 
 local function source_background(group, kind)
