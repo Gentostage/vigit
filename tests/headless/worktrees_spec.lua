@@ -605,7 +605,9 @@ it("разделяет цвет типа worktree и его состояния",
     {
       kind = "root", path = "/repo", name = "repo", branch = "main",
       files = { staged = 0, unstaged = 0, untracked = 0 },
-      upstream = { state = "tracking", name = "origin/main" },
+      upstream = {
+        state = "tracking", name = "origin/main", ahead = 1, behind = 2,
+      },
     },
     {
       kind = "linked", path = "/repo/wt", name = "wt", branch = "feature/wt",
@@ -636,9 +638,16 @@ it("разделяет цвет типа worktree и его состояния",
     assert_truthy(highlight.group ~= "Identifier")
   end
   assert_truthy(groups[3].VigitWorktreeRoot)
-  assert_truthy(groups[3].VigitWorktreeClean)
+  assert_truthy(groups[3].VigitWorktreeStaged)
+  assert_truthy(groups[3].VigitWorktreeUnstaged)
+  assert_truthy(groups[3].VigitWorktreeUntracked)
+  assert_truthy(groups[3].VigitWorktreeUpstream)
+  assert_truthy(groups[3].VigitWorktreeDivergence)
   assert_truthy(groups[4].VigitWorktreeLinked)
-  assert_truthy(groups[4].VigitWorktreeDirty)
+  assert_truthy(groups[4].VigitWorktreeStaged)
+  assert_truthy(groups[4].VigitWorktreeUnstaged)
+  assert_truthy(groups[4].VigitWorktreeUntracked)
+  assert_truthy(groups[4].VigitWorktreeUpstream)
   assert_truthy(groups[5].VigitWorktreeDetached)
   assert_truthy(groups[6].VigitWorktreeError)
 end)

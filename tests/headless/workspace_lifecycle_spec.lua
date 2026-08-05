@@ -376,7 +376,15 @@ it("открывает terminal split внутри workspace tab", function()
     session = assert(v2.open({ cwd = repo.root }))
     focus_source_row(session, "src/service.py", "value = \"new\"", 0)
 
-    controller.dispatch(session, "open_terminal")
+    local terminal_mapping = vim.fn.maparg(
+      "<leader>h",
+      "n",
+      false,
+      true
+    )
+    assert_equal(terminal_mapping.buffer, 1)
+    assert_equal(type(terminal_mapping.callback), "function")
+    terminal_mapping.callback()
 
     assert_equal(#vim.api.nvim_list_tabpages(), initial_tabs)
     assert_equal(vim.api.nvim_get_current_tabpage(), initial_tab)

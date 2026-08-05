@@ -760,6 +760,7 @@ function M.open_terminal(context, done)
     if type(job) ~= "number" or job <= 0 then
       error("termopen returned invalid job id: " .. vim.inspect(job))
     end
+    vim.cmd("startinsert")
     resources.terminal = {
       tab = tab,
       win = window,

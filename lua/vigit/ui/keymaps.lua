@@ -18,7 +18,7 @@ local entries = {
   { id = "change.next_file", modes = { "n" }, lhs = "]f", contexts = { "diff", "changes" }, group = "navigation", description = "Select next file", intent = "next_file" },
   { id = "navigation.open_file", modes = { "n" }, lhs = "e", contexts = { "diff", "changes" }, group = "navigation", description = "Open source file", intent = "open_file" },
   { id = "navigation.goto_definition", modes = { "n" }, lhs = "gd", contexts = { "diff", "changes" }, group = "navigation", description = "Go to source definition", intent = "goto_definition" },
-  { id = "navigation.open_terminal", modes = { "n" }, lhs = "T", contexts = { "diff", "changes" }, group = "lifecycle", description = "Open worktree terminal", intent = "open_terminal" },
+  { id = "navigation.open_terminal", modes = { "n" }, lhs = "T", aliases = { "<leader>h" }, contexts = { "diff", "changes" }, group = "lifecycle", description = "Open worktree terminal", intent = "open_terminal" },
   { id = "view.toggle_context", modes = { "n" }, lhs = "f", contexts = { "diff" }, group = "view", description = "Toggle full hunk context", intent = "toggle_context" },
   { id = "change.toggle_index", modes = { "n" }, lhs = "s", contexts = { "diff", "changes" }, group = "git", description = "Stage or unstage current file", intent = "toggle_file_index" },
   { id = "hunk.toggle_index", modes = { "n" }, lhs = "S", contexts = { "diff" }, group = "git", description = "Stage or unstage current hunk", intent = "toggle_hunk_index" },

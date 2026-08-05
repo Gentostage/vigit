@@ -127,27 +127,6 @@ local function has_probe_error(row)
   return false
 end
 
-local function is_dirty(row)
-  local files = row.files or {}
-  return (files.staged or 0) > 0
-    or (files.unstaged or 0) > 0
-    or (files.untracked or 0) > 0
-end
-
-local function state_group(row)
-  if has_probe_error(row) then return "VigitWorktreeError" end
-  if is_dirty(row) then return "VigitWorktreeDirty" end
-  if row.detached
-      or (row.upstream and row.upstream.state == "detached") then
-    return "VigitWorktreeDetached"
-  end
-  if row.upstream and row.upstream.state == "no_upstream" then
-    return "VigitWorktreeDetached"
-  end
-  if row.active then return "VigitWorktreeActive" end
-  return "VigitWorktreeClean"
-end
-
 local function add_highlight(output, row, group, start_col, end_col)
   output.highlights[#output.highlights + 1] = {
     row = row,
@@ -157,9 +136,87 @@ local function add_highlight(output, row, group, start_col, end_col)
   }
 end
 
+local function add_match(spans, text, needle, group, init)
+  local start_col, end_col = text:find(needle, init or 1, true)
+  if not start_col then return init end
+  spans[#spans + 1] = {
+    group = group,
+    start_col = start_col - 1,
+    end_col = end_col,
+  }
+  return end_col + 1
+end
+
+local function status_spans(row, text)
+  local spans = {}
+  if has_probe_error(row) then
+    spans[#spans + 1] = {
+      group = "VigitWorktreeError",
+      start_col = 0,
+      end_col = #text,
+    }
+    return spans
+  end
+
+  local files = row.files or {}
+  local cursor = 1
+  if row.files or (probe(row, "status") or {}).state == "ok" then
+    cursor = add_match(
+      spans, text, "S:" .. (files.staged or 0),
+      "VigitWorktreeStaged", cursor
+    )
+    cursor = add_match(
+      spans, text, "M:" .. (files.unstaged or 0),
+      "VigitWorktreeUnstaged", cursor
+    )
+    cursor = add_match(
+      spans, text, "?:" .. (files.untracked or 0),
+      "VigitWorktreeUntracked", cursor
+    )
+  end
+
+  local upstream = row.upstream
+  if upstream and upstream.state == "tracking" then
+    add_match(
+      spans, text, upstream.name or "upstream",
+      "VigitWorktreeUpstream"
+    )
+    if (upstream.ahead or 0) > 0 then
+      add_match(
+        spans, text, "↑" .. upstream.ahead,
+        "VigitWorktreeDivergence"
+      )
+    end
+    if (upstream.behind or 0) > 0 then
+      add_match(
+        spans, text, "↓" .. upstream.behind,
+        "VigitWorktreeDivergence"
+      )
+    end
+  elseif upstream
+      and (upstream.state == "detached" or upstream.state == "no_upstream") then
+    add_match(
+      spans,
+      text,
+      upstream.state == "detached" and "detached" or "no upstream",
+      "VigitWorktreeDetached"
+    )
+  end
+  if row.active then
+    add_match(spans, text, "ACTIVE", "VigitWorktreeActive")
+  end
+  return spans
+end
+
 function M.render(rows, maximum, selected_path, error)
   maximum = math.max(1, maximum or 20)
-  local output = { lines = { "WORKTREES" }, targets = {}, highlights = {} }
+  local output = {
+    lines = { "WORKTREES" },
+    targets = {},
+    highlights = {
+      { row = 1, group = "VigitWorktreeHeader" },
+    },
+  }
   local wide = maximum >= 100
   if wide then
     local status_width = math.max(48, math.floor(maximum * 0.55))
@@ -172,6 +229,7 @@ function M.render(rows, maximum, selected_path, error)
     output.lines[#output.lines + 1] = table.concat({
       pad("TYPE", 4), pad("NAME", name_width), pad("BRANCH", branch_width), pad("STATUS", status_width),
     }, "  ")
+    add_highlight(output, #output.lines, "VigitWorktreeColumns", 0, -1)
   end
   if error then
     output.lines[#output.lines + 1] = shorten("Error: " .. error.message, maximum)
@@ -189,7 +247,8 @@ function M.render(rows, maximum, selected_path, error)
       local type_text = pad(type_label, layout.type)
       local name_text = pad(row.name, layout.name)
       local branch_text = pad(branch(row), layout.branch)
-      local status_text = pad(status(row, layout.status), layout.status)
+      local status_value = status(row, layout.status)
+      local status_text = pad(status_value, layout.status)
       first = table.concat({
         type_text, name_text, branch_text, status_text,
       }, "  ")
@@ -210,12 +269,14 @@ function M.render(rows, maximum, selected_path, error)
           start_col = branch_start,
           end_col = branch_start + #shorten(branch(row), layout.branch),
         },
-        {
-          group = state_group(row),
-          start_col = status_start,
-          end_col = status_start + #shorten(status(row, layout.status), layout.status),
-        },
       }
+      for _, span in ipairs(status_spans(row, status_value)) do
+        spans[#spans + 1] = {
+          group = span.group,
+          start_col = status_start + span.start_col,
+          end_col = status_start + span.end_col,
+        }
+      end
     else
       first = string.format("%s  %s · %s", type_label, row.name, branch(row))
       local name_start = #type_label + 2
@@ -250,8 +311,18 @@ function M.render(rows, maximum, selected_path, error)
       )
     end
     if not wide then
-      output.lines[#output.lines + 1] = shorten(narrow_details(row, maximum), maximum)
-      add_highlight(output, #output.lines, state_group(row), 0, -1)
+      local details = shorten(narrow_details(row, maximum), maximum)
+      output.lines[#output.lines + 1] = details
+      local status_text = details:sub(3)
+      for _, span in ipairs(status_spans(row, status_text)) do
+        add_highlight(
+          output,
+          #output.lines,
+          span.group,
+          span.start_col + 2,
+          span.end_col + 2
+        )
+      end
     end
   end
   if #(rows or {}) == 0 then
