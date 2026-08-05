@@ -180,6 +180,38 @@ local function same_identity(first, second, platform)
     and first.detached == (second.detached == true)
 end
 
+local function relocate_origin(self, origin, target, survivor)
+  local platform = self.neovim and self.neovim.platform
+  if not origin or not same_root(origin.root, target.path, platform) then
+    return Result.ok(nil)
+  end
+  if type(self.switch_session) ~= "function" then
+    return Result.err(
+      "worktree_switch_unavailable",
+      "Cannot switch to a surviving worktree before removal"
+    )
+  end
+  local switched = self.switch_session(survivor.path, { mode = "review" })
+  if not Result.is(switched) then
+    return Result.err(
+      "worktree_switch_failed",
+      "Unable to switch to a surviving worktree before removal",
+      switched
+    )
+  end
+  if not switched.ok then return switched end
+  local session = switched.value
+  if type(session) ~= "table"
+      or session.closed
+      or not same_root(session.root, survivor.path, platform) then
+    return Result.err(
+      "worktree_switch_failed",
+      "Worktree switch returned an invalid surviving session"
+    )
+  end
+  return Result.ok(session)
+end
+
 function Worktrees:_loaded_paths(root)
   if not self.neovim or type(self.neovim.loaded_source_buffers) ~= "function" then
     return Result.err("loaded_source_buffers_unavailable", "Loaded source buffer inspection is unavailable")
@@ -259,13 +291,6 @@ function Worktrees:remove(entry, callback, origin)
     fail_blocker(static_blocker)
     return { cancel = cancel }
   end
-  if origin and same_root(origin.root, entry.path, self.neovim and self.neovim.platform) then
-    complete(Result.err(
-      "picker_origin",
-      "Open the worktree picker from another surviving worktree before removing this one"
-    ))
-    return { cancel = cancel }
-  end
   local initial_blocker, initial_error = self:_removal_blocker(entry, entry.path)
   if initial_error then
     complete(initial_error)
@@ -331,16 +356,25 @@ function Worktrees:remove(entry, callback, origin)
             local blocker, blocker_error = self:_removal_blocker(target, target.path)
             if blocker_error then complete(blocker_error); return end
             if blocker then fail_blocker(blocker); return end
+            local relocated = relocate_origin(self, origin, target, primary)
+            if not relocated.ok then complete(relocated); return end
+            local function complete_relocated(result)
+              result.origin = relocated.value
+              complete(result)
+            end
             mutation_started = true
             add_handle(self.git:remove_worktree(primary.path, target.path, once(function(remove_result)
               if cancelled then return end
-              if not remove_result.ok then complete(remove_result); return end
+              if not remove_result.ok then complete_relocated(remove_result); return end
               add_handle(self.git:worktrees(primary.path, once(function(postcondition)
                 if cancelled then return end
-                if not postcondition.ok then complete(postcondition); return end
+                if not postcondition.ok then complete_relocated(postcondition); return end
                 for _, candidate in ipairs(postcondition.value) do
                   if same_root(candidate.path, target.path, self.neovim and self.neovim.platform) then
-                    complete(Result.err("unsafe_worktree", "Worktree remains registered after removal"))
+                    complete_relocated(Result.err(
+                      "unsafe_worktree",
+                      "Worktree remains registered after removal"
+                    ))
                     return
                   end
                 end
@@ -352,11 +386,18 @@ function Worktrees:remove(entry, callback, origin)
                 if session and not session.closed and type(self.close_session) == "function" then
                   local closed, close_error = pcall(self.close_session, session)
                   if not closed then
-                    complete(Result.err("session_close_failed", "Removed worktree Vigit session could not be closed", close_error))
+                    complete_relocated(Result.err(
+                      "session_close_failed",
+                      "Removed worktree Vigit session could not be closed",
+                      close_error
+                    ))
                     return
                   end
                 end
-                complete(Result.ok({ path = target.path }))
+                complete_relocated(Result.ok({
+                  path = target.path,
+                  origin = relocated.value,
+                }))
               end)))
             end)))
           end)))

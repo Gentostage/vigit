@@ -9,6 +9,31 @@ local function close_session(session)
   end
 end
 
+local function listed_unnamed_buffers()
+  local count = 0
+  for _, buffer in ipairs(vim.api.nvim_list_bufs()) do
+    if vim.api.nvim_buf_is_valid(buffer)
+        and vim.bo[buffer].buflisted
+        and vim.api.nvim_buf_get_name(buffer) == "" then
+      count = count + 1
+    end
+  end
+  return count
+end
+
+local function cleanup_terminals()
+  for _, buffer in ipairs(vim.api.nvim_list_bufs()) do
+    if vim.api.nvim_buf_is_valid(buffer)
+        and vim.bo[buffer].buftype == "terminal" then
+      local job = vim.b[buffer].terminal_job_id
+      if type(job) == "number" and job > 0 then
+        pcall(vim.fn.jobstop, job)
+      end
+      pcall(vim.api.nvim_buf_delete, buffer, { force = true })
+    end
+  end
+end
+
 local function select_worktree(picker, path)
   local canonical = assert(vim.uv.fs_realpath(path))
   assert_truthy(vim.wait(2000, function()
@@ -87,7 +112,7 @@ it("открывает picker worktree, различает ROOT и WT и фок�
   if not ok then error(message, 0) end
 end)
 
-it("сохраняет editor mode и последний buffer при выборе worktree через W", function()
+it("переносит текущий относительный файл между worktree без пустого buffer", function()
   local repo = Fixture.new()
   local linked = vim.fn.tempname()
   local root_session
@@ -104,6 +129,7 @@ it("сохраняет editor mode и последний buffer при выбо�
     vim.cmd("edit " .. vim.fn.fnameescape(repo.root .. "/README.md"))
     local root_buffer = vim.api.nvim_get_current_buf()
     buffers[#buffers + 1] = root_buffer
+    local unnamed_before = listed_unnamed_buffers()
 
     linked_session = select_worktree(
       assert(v2.worktrees({ session = root_session })),
@@ -112,10 +138,11 @@ it("сохраняет editor mode и последний buffer при выбо�
     assert_equal(linked_session.workspace:mode_name(), "code")
     assert_equal(layout.is_visible(linked_session), false)
     assert_equal(vim.fn.getcwd(0, 0), assert(vim.uv.fs_realpath(linked)))
-    assert_equal(vim.api.nvim_buf_get_name(0), "")
-    buffers[#buffers + 1] = vim.api.nvim_get_current_buf()
-
-    vim.cmd("edit " .. vim.fn.fnameescape(linked .. "/README.md"))
+    assert_equal(
+      vim.api.nvim_buf_get_name(0),
+      assert(vim.uv.fs_realpath(linked .. "/README.md"))
+    )
+    assert_equal(listed_unnamed_buffers(), unnamed_before)
     local linked_buffer = vim.api.nvim_get_current_buf()
     buffers[#buffers + 1] = linked_buffer
 
@@ -132,6 +159,7 @@ it("сохраняет editor mode и последний buffer при выбо�
     )
     assert_equal(linked_session.workspace:mode_name(), "code")
     assert_equal(vim.api.nvim_get_current_buf(), linked_buffer)
+    assert_equal(listed_unnamed_buffers(), unnamed_before)
   end, debug.traceback)
 
   close_session(linked_session)
@@ -140,6 +168,63 @@ it("сохраняет editor mode и последний buffer при выбо�
     if vim.api.nvim_buf_is_valid(buffer) then
       pcall(vim.api.nvim_buf_delete, buffer, { force = true })
     end
+  end
+  vim.fn.delete(linked, "rf")
+  repo:cleanup()
+  if not ok then error(message, 0) end
+end)
+
+it("оставляет review и рабочий T mapping без mirror-файла", function()
+  local repo = Fixture.new()
+  local linked = vim.fn.tempname()
+  local root_session
+  local linked_session
+  local source_buffer
+  local terminal_buffer
+  local ok, message = xpcall(function()
+    repo:write("README.md", { "fixture" })
+    repo:git({ "add", "README.md" })
+    repo:commit("initial")
+    repo:git({ "worktree", "add", "-q", "-b", "linked-fallback", linked })
+
+    root_session = assert(v2.open({ cwd = repo.root }))
+    controller.dispatch(root_session, "close")
+    repo:write("root-only.py", { "value = 1" })
+    vim.cmd("edit " .. vim.fn.fnameescape(repo.root .. "/root-only.py"))
+    source_buffer = vim.api.nvim_get_current_buf()
+    local unnamed_before = listed_unnamed_buffers()
+
+    linked_session = select_worktree(
+      assert(v2.worktrees({ session = root_session })),
+      linked
+    )
+    assert_equal(linked_session.workspace:mode_name(), "review")
+    assert_truthy(layout.is_visible(linked_session))
+    assert_equal(listed_unnamed_buffers(), unnamed_before)
+    local terminal_mapping = vim.fn.maparg("T", "n", false, true)
+    assert_equal(terminal_mapping.buffer, 1)
+    assert_equal(type(terminal_mapping.callback), "function")
+
+    terminal_mapping.callback()
+    assert_truthy(vim.wait(2000, function()
+      return linked_session.resources.terminal ~= nil
+    end, 10))
+    local terminal = linked_session.resources.terminal
+    terminal_buffer = terminal.buf
+    assert_equal(vim.api.nvim_get_current_tabpage(), terminal.tab)
+    assert_equal(vim.api.nvim_get_current_win(), terminal.win)
+    assert_equal(vim.api.nvim_get_current_buf(), terminal.buf)
+    assert_equal(vim.bo[terminal.buf].buftype, "terminal")
+  end, debug.traceback)
+
+  cleanup_terminals()
+  close_session(linked_session)
+  close_session(root_session)
+  if source_buffer and vim.api.nvim_buf_is_valid(source_buffer) then
+    pcall(vim.api.nvim_buf_delete, source_buffer, { force = true })
+  end
+  if terminal_buffer and vim.api.nvim_buf_is_valid(terminal_buffer) then
+    pcall(vim.api.nvim_buf_delete, terminal_buffer, { force = true })
   end
   vim.fn.delete(linked, "rf")
   repo:cleanup()

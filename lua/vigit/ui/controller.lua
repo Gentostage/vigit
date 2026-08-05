@@ -782,6 +782,18 @@ local function handler_context(session)
   })
 end
 
+local function terminal_context(session)
+  local values = handler_context(session)
+  if values then return values end
+  return readonly({
+    session_id = session.id,
+    root = session.root,
+    branch = session.branch,
+    workspace = session.workspace,
+    resources = session.resources,
+  })
+end
+
 local function valid_handler_result(result)
   if not Result.is(result) then
     return false
@@ -857,9 +869,10 @@ local function invoke_handler(
   session,
   action,
   unavailable_message,
-  failure_message
+  failure_message,
+  context_provider
 )
-  local values = handler_context(session)
+  local values = (context_provider or handler_context)(session)
   if not values then
     return
   end
@@ -1104,7 +1117,8 @@ function M.dispatch(session, intent)
       session,
       "open_terminal",
       "Terminal handler is unavailable",
-      "Terminal handler failed"
+      "Terminal handler failed",
+      terminal_context
     )
   elseif name == "open_worktrees" then
     if context.worktrees and type(context.worktrees.open) == "function" then

@@ -324,17 +324,15 @@ worktrees = Worktrees.new({
     })
     if session then
       if opts and opts.mode == "code" then
-        if opts.source_buffer then
-          neovim.remember_source_buffer(
-            session.resources,
-            session.root,
-            opts.source_buffer
-          )
-        end
-        local code_mode = workspace:show_code()
-        if not code_mode.ok then return code_mode end
-        local restored = neovim.show_editor(session, workspace)
+        local restored = neovim.show_editor(session, workspace, {
+          source_root = opts.source_root,
+          source_buffer = opts.source_buffer,
+        })
         if not restored.ok then return restored end
+        if restored.value then
+          local code_mode = workspace:show_code()
+          if not code_mode.ok then return code_mode end
+        end
       end
       if previous_root ~= session.root then
         log.event("session_switch", {
@@ -563,6 +561,7 @@ function M.worktrees(opts)
     origin = origin,
     origin_tab = vim.api.nvim_get_current_tabpage(),
     return_mode = return_mode,
+    source_root = root,
     source_buffer = source_buffer,
     selected_path = root,
   })

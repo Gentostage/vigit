@@ -297,6 +297,7 @@ function M.open(opts)
     origin = origin,
     origin_tab = opts.origin_tab or vim.api.nvim_get_current_tabpage(),
     return_mode = opts.return_mode or "review",
+    source_root = opts.source_root,
     source_buffer = opts.source_buffer,
     rows = {},
     targets = {},
@@ -358,6 +359,7 @@ function M.open(opts)
       end
     end, {
       mode = self.return_mode,
+      source_root = self.source_root,
       source_buffer = self.source_buffer,
     })
     pending.cancel = handle and handle.cancel
@@ -392,11 +394,21 @@ function M.open(opts)
       if self.pending_remove ~= pending then return end
       self.pending_remove = nil
       if self.closed then return end
+      if result.origin then
+        self.origin = result.origin
+        self.source_root = self.origin.root
+        self.source_buffer = nil
+      end
       if not result.ok then
         record_error(self, result.error)
         self.error = result.error
         self:render_now()
         return
+      end
+      if not result.origin and result.value and result.value.origin then
+        self.origin = result.value.origin
+        self.source_root = self.origin.root
+        self.source_buffer = nil
       end
       self.selected_path = self.origin.root
       self:refresh()

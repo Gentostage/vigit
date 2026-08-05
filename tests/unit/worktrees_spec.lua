@@ -901,53 +901,160 @@ it("после старта remove cancel отсоединяет UI, но зав
   assert_equal(callback_calls, 0)
 end)
 
-it("блокирует удаление worktree, из которого открыт picker", function()
+it("не удаляет active worktree, если переход на surviving ROOT не удался", function()
   local Worktrees = require("vigit.application.worktrees")
   local Result = require("vigit.core.result")
   local confirmations = 0
+  local removals = 0
+  local switches = 0
   local entry = {
-    kind = "linked", path = "/repo/linked",
+    kind = "linked", path = "/repo/linked", head = "linked-head",
+    branch_ref = "refs/heads/linked",
     files = { staged = 0, unstaged = 0, untracked = 0 },
     upstream = { state = "tracking", source = "local_refs", ahead = 0, behind = 0 },
   }
   local app = Worktrees.new({
-    git = fake_git({}),
+    git = {
+      worktrees = function(_, _, callback)
+        callback(Result.ok({
+          { kind = "root", path = "/repo", head = "main", branch_ref = "refs/heads/main" },
+          entry,
+        }))
+        return { cancel = function() end }
+      end,
+      worktree_status = function(_, _, callback)
+        callback(Result.ok({ staged = 0, unstaged = 0, untracked = 0 }))
+        return { cancel = function() end }
+      end,
+      upstream = function(_, _, callback)
+        callback(Result.ok({ state = "tracking", source = "local_refs", ahead = 0, behind = 0 }))
+        return { cancel = function() end }
+      end,
+      remove_worktree = function()
+        removals = removals + 1
+        return { cancel = function() end }
+      end,
+    },
     neovim = { loaded_source_buffers = function() return Result.ok({}) end },
-    confirm = function() confirmations = confirmations + 1 end,
+    confirm = function(_, callback)
+      confirmations = confirmations + 1
+      callback(true)
+      return { cancel = function() end }
+    end,
+    switch_session = function(root)
+      switches = switches + 1
+      assert_equal(root, "/repo")
+      return Result.err("running_terminal", "Exit terminal before switching")
+    end,
   })
   local result
 
   app:remove(entry, function(value) result = value end, { root = entry.path })
 
   assert_equal(result.ok, false)
-  assert_equal(result.error.code, "picker_origin")
-  assert_equal(confirmations, 0)
+  assert_equal(result.error.code, "running_terminal")
+  assert_equal(confirmations, 1)
+  assert_equal(switches, 1)
+  assert_equal(removals, 0)
 end)
 
-it("сравнивает picker origin Windows worktree без учёта case и разделителя", function()
+it("возвращает surviving origin после ошибки Git вслед за relocation", function()
   local Worktrees = require("vigit.application.worktrees")
   local Result = require("vigit.core.result")
-  local confirmations = 0
+  local survivor = { root = "/repo", closed = false }
   local entry = {
-    kind = "linked", path = "C:\\Repo\\Feature",
+    kind = "linked", path = "/repo/linked", head = "linked-head",
+    branch_ref = "refs/heads/linked",
     files = { staged = 0, unstaged = 0, untracked = 0 },
     upstream = { state = "tracking", source = "local_refs", ahead = 0, behind = 0 },
   }
   local app = Worktrees.new({
-    git = fake_git({}),
+    git = {
+      worktrees = function(_, _, callback)
+        callback(Result.ok({
+          { kind = "root", path = "/repo", head = "main", branch_ref = "refs/heads/main" },
+          entry,
+        }))
+        return { cancel = function() end }
+      end,
+      worktree_status = function(_, _, callback)
+        callback(Result.ok({ staged = 0, unstaged = 0, untracked = 0 }))
+        return { cancel = function() end }
+      end,
+      upstream = function(_, _, callback)
+        callback(Result.ok({ state = "tracking", source = "local_refs", ahead = 0, behind = 0 }))
+        return { cancel = function() end }
+      end,
+      remove_worktree = function(_, _, _, callback)
+        callback(Result.err("git_failed", "remove failed"))
+        return { cancel = function() end }
+      end,
+    },
+    neovim = { loaded_source_buffers = function() return Result.ok({}) end },
+    confirm = function(_, callback)
+      callback(true)
+      return { cancel = function() end }
+    end,
+    switch_session = function() return Result.ok(survivor) end,
+  })
+  local result
+
+  app:remove(entry, function(value) result = value end, { root = entry.path })
+
+  assert_equal(result.ok, false)
+  assert_equal(result.error.code, "git_failed")
+  assert_equal(result.origin, survivor)
+end)
+
+it("распознаёт active Windows worktree при выборе surviving ROOT", function()
+  local Worktrees = require("vigit.application.worktrees")
+  local Result = require("vigit.core.result")
+  local switched_root
+  local entry = {
+    kind = "linked", path = "C:\\Repo\\Feature", head = "feature",
+    branch_ref = "refs/heads/feature",
+    files = { staged = 0, unstaged = 0, untracked = 0 },
+    upstream = { state = "tracking", source = "local_refs", ahead = 0, behind = 0 },
+  }
+  local app = Worktrees.new({
+    git = {
+      worktrees = function(_, _, callback)
+        callback(Result.ok({
+          { kind = "root", path = "C:\\Repo", head = "main", branch_ref = "refs/heads/main" },
+          entry,
+        }))
+        return { cancel = function() end }
+      end,
+      worktree_status = function(_, _, callback)
+        callback(Result.ok({ staged = 0, unstaged = 0, untracked = 0 }))
+        return { cancel = function() end }
+      end,
+      upstream = function(_, _, callback)
+        callback(Result.ok({ state = "tracking", source = "local_refs", ahead = 0, behind = 0 }))
+        return { cancel = function() end }
+      end,
+      remove_worktree = function() error("remove must not run") end,
+    },
     neovim = {
       platform = "win32",
       loaded_source_buffers = function() return Result.ok({}) end,
     },
-    confirm = function() confirmations = confirmations + 1 end,
+    confirm = function(_, callback)
+      callback(true)
+      return { cancel = function() end }
+    end,
+    switch_session = function(root)
+      switched_root = root
+      return Result.err("switch_blocked", "blocked for test")
+    end,
   })
   local result
 
   app:remove(entry, function(value) result = value end, { root = "c:/repo/feature/" })
 
+  assert_equal(switched_root, "C:\\Repo")
   assert_equal(result.ok, false)
-  assert_equal(result.error.code, "picker_origin")
-  assert_equal(confirmations, 0)
+  assert_equal(result.error.code, "switch_blocked")
 end)
 
 it("rejects every malformed BufferInfo before confirmation", function()

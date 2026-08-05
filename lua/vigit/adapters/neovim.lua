@@ -220,16 +220,66 @@ local function remembered_source_buffer(session)
   return buffer
 end
 
-function M.show_editor(session, workspace)
+local function mirrored_source_buffer(target_root, source_root, source_buffer)
+  if type(target_root) ~= "string"
+      or type(source_root) ~= "string"
+      or not source_buffer
+      or not vim.api.nvim_buf_is_valid(source_buffer)
+      or not vim.api.nvim_buf_is_loaded(source_buffer)
+      or vim.bo[source_buffer].buftype ~= "" then
+    return nil
+  end
+  local source_name = vim.api.nvim_buf_get_name(source_buffer)
+  if source_name == "" then return nil end
+
+  local source_path = canonical_path(source_name)
+  local canonical_source_root = canonical_path(source_root)
+  local canonical_target_root = canonical_path(target_root)
+  if not source_path
+      or not canonical_source_root
+      or not canonical_target_root
+      or not is_within(canonical_source_root, source_path) then
+    return nil
+  end
+
+  local relative = vim.fs.relpath(canonical_source_root, source_path)
+  if not relative or relative == "" or relative == "." then return nil end
+  local target_path = canonical_path(vim.fs.joinpath(
+    canonical_target_root,
+    relative
+  ))
+  if not target_path or not is_within(canonical_target_root, target_path) then
+    return nil
+  end
+  local stat = vim.uv.fs_stat(target_path)
+  if not stat or stat.type ~= "file" then return nil end
+
+  local buffer = vim.fn.bufadd(target_path)
+  vim.fn.bufload(buffer)
+  vim.bo[buffer].buflisted = true
+  return buffer
+end
+
+function M.show_editor(session, workspace, opts)
+  opts = opts or {}
   local result
   local ok, message = xpcall(function()
+    local buffer = remembered_source_buffer(session)
+      or mirrored_source_buffer(
+        session.root,
+        opts.source_root,
+        opts.source_buffer
+      )
+    if not buffer then
+      result = Result.ok(nil)
+      return
+    end
     local window = workspace_window(workspace)
     if not window then error("Vigit workspace is unavailable") end
-    local buffer = remembered_source_buffer(session)
-      or vim.api.nvim_create_buf(true, false)
     vim.api.nvim_set_current_tabpage(workspace.tab)
     vim.api.nvim_set_current_win(window)
     vim.api.nvim_win_set_buf(window, buffer)
+    M.remember_source_buffer(session.resources, session.root, buffer)
     result = Result.ok({
       tab = workspace.tab,
       win = window,

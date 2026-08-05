@@ -42,8 +42,8 @@ end
 assert(test_count > 0, "test runner loaded zero tests")
 if using_default_files then
   assert(
-    test_count == 185,
-    string.format("expected 185 default tests, loaded %d", test_count)
+    test_count == 186,
+    string.format("expected 186 default tests, loaded %d", test_count)
   )
 end
 
