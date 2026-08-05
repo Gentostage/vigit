@@ -54,7 +54,7 @@ end
 
 function Workspace:_set_root(root)
   return valid_result(
-    self.set_root(self.tab, root),
+    self.set_root(self, root),
     "workspace_root_failed",
     "Unable to set workspace root"
   )
@@ -164,6 +164,8 @@ function Workspace:show_review()
       "No active Vigit session"
     )
   end
+  local rooted = self:_set_root(self.root)
+  if not rooted.ok then return rooted end
   local shown = self:_show(self.session)
   if shown.ok then
     self.mode = "review"
@@ -179,6 +181,8 @@ function Workspace:show_code()
       "No active Vigit session"
     )
   end
+  local rooted = self:_set_root(self.root)
+  if not rooted.ok then return rooted end
   self.hide(self.session)
   self.mode = "code"
   return Result.ok(self.session)

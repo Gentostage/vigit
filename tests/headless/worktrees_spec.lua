@@ -138,6 +138,7 @@ it("переносит текущий относительный файл меж
     assert_equal(linked_session.workspace:mode_name(), "code")
     assert_equal(layout.is_visible(linked_session), false)
     assert_equal(vim.fn.getcwd(0, 0), assert(vim.uv.fs_realpath(linked)))
+    assert_equal(vim.uv.cwd(), assert(vim.uv.fs_realpath(linked)))
     assert_equal(
       vim.api.nvim_buf_get_name(0),
       assert(vim.uv.fs_realpath(linked .. "/README.md"))
@@ -168,6 +169,105 @@ it("переносит текущий относительный файл меж
     if vim.api.nvim_buf_is_valid(buffer) then
       pcall(vim.api.nvim_buf_delete, buffer, { force = true })
     end
+  end
+  vim.fn.delete(linked, "rf")
+  repo:cleanup()
+  if not ok then error(message, 0) end
+end)
+
+it("не принимает имя nofile tree buffer за root worktree", function()
+  local repo = Fixture.new()
+  local linked = vim.fn.tempname()
+  local root_session
+  local linked_session
+  local source_buffer
+  local tree_buffer
+  local tree_window
+  local picker
+  local ok, message = xpcall(function()
+    repo:write("README.md", { "fixture" })
+    repo:git({ "add", "README.md" })
+    repo:commit("initial")
+    repo:git({ "worktree", "add", "-q", "-b", "linked-tree", linked })
+
+    root_session = assert(v2.open({ cwd = repo.root }))
+    linked_session = assert(v2.open({ cwd = linked }))
+    controller.dispatch(linked_session, "close")
+    vim.cmd("edit " .. vim.fn.fnameescape(linked .. "/README.md"))
+    source_buffer = vim.api.nvim_get_current_buf()
+
+    vim.cmd("vsplit")
+    tree_window = vim.api.nvim_get_current_win()
+    tree_buffer = vim.api.nvim_create_buf(false, true)
+    vim.api.nvim_buf_set_name(tree_buffer, repo.root .. "/NvimTree_1")
+    vim.bo[tree_buffer].buftype = "nofile"
+    vim.bo[tree_buffer].filetype = "NvimTree"
+    vim.api.nvim_win_set_buf(tree_window, tree_buffer)
+
+    picker = assert(v2.worktrees({ session = linked_session }))
+    local linked_root = assert(vim.uv.fs_realpath(linked))
+    assert_truthy(vim.wait(2000, function()
+      return picker.row_by_path[linked_root] ~= nil
+    end, 10))
+    assert_equal(picker.selected_path, linked_root)
+  end, debug.traceback)
+
+  if picker and not picker.closed then picker:close() end
+  if tree_window and vim.api.nvim_win_is_valid(tree_window) then
+    pcall(vim.api.nvim_win_close, tree_window, true)
+  end
+  if tree_buffer and vim.api.nvim_buf_is_valid(tree_buffer) then
+    pcall(vim.api.nvim_buf_delete, tree_buffer, { force = true })
+  end
+  if source_buffer and vim.api.nvim_buf_is_valid(source_buffer) then
+    pcall(vim.api.nvim_buf_delete, source_buffer, { force = true })
+  end
+  close_session(linked_session)
+  close_session(root_session)
+  vim.fn.delete(linked, "rf")
+  repo:cleanup()
+  if not ok then error(message, 0) end
+end)
+
+it("остаётся в code mode при переключении из directory buffer", function()
+  local repo = Fixture.new()
+  local linked = vim.fn.tempname()
+  local root_session
+  local linked_session
+  local directory_buffer
+  local picker
+  local ok, message = xpcall(function()
+    repo:write("README.md", { "fixture" })
+    repo:git({ "add", "README.md" })
+    repo:commit("initial")
+    repo:git({ "worktree", "add", "-q", "-b", "linked-directory", linked })
+
+    root_session = assert(v2.open({ cwd = repo.root }))
+    controller.dispatch(root_session, "close")
+    vim.cmd("edit " .. vim.fn.fnameescape(repo.root))
+    directory_buffer = vim.api.nvim_get_current_buf()
+    local unnamed_before = listed_unnamed_buffers()
+
+    picker = assert(v2.worktrees({ session = root_session }))
+    assert_equal(picker.return_mode, "code")
+    assert_equal(picker.source_kind, "directory")
+    linked_session = select_worktree(picker, linked)
+
+    assert_equal(linked_session.workspace:mode_name(), "code")
+    assert_equal(layout.is_visible(linked_session), false)
+    assert_equal(
+      vim.api.nvim_buf_get_name(0),
+      assert(vim.uv.fs_realpath(linked))
+    )
+    assert_equal(vim.fn.getcwd(0, 0), assert(vim.uv.fs_realpath(linked)))
+    assert_equal(listed_unnamed_buffers(), unnamed_before)
+  end, debug.traceback)
+
+  if picker and not picker.closed then picker:close() end
+  close_session(linked_session)
+  close_session(root_session)
+  if directory_buffer and vim.api.nvim_buf_is_valid(directory_buffer) then
+    pcall(vim.api.nvim_buf_delete, directory_buffer, { force = true })
   end
   vim.fn.delete(linked, "rf")
   repo:cleanup()
@@ -497,6 +597,50 @@ it("рендерит literal upstream safety matrix из local refs", function()
     1,
     true
   ) ~= nil)
+end)
+
+it("разделяет цвет типа worktree и его состояния", function()
+  local view = require("vigit.ui.views.worktrees")
+  local output = view.render({
+    {
+      kind = "root", path = "/repo", name = "repo", branch = "main",
+      files = { staged = 0, unstaged = 0, untracked = 0 },
+      upstream = { state = "tracking", name = "origin/main" },
+    },
+    {
+      kind = "linked", path = "/repo/wt", name = "wt", branch = "feature/wt",
+      files = { staged = 0, unstaged = 2, untracked = 1 },
+      upstream = { state = "tracking", name = "origin/feature/wt" },
+    },
+    {
+      kind = "linked", path = "/repo/detached", name = "detached",
+      detached = true,
+      files = { staged = 0, unstaged = 0, untracked = 0 },
+      upstream = { state = "detached" },
+    },
+    {
+      kind = "linked", path = "/repo/error", name = "error", branch = "broken",
+      probes = {
+        status = {
+          state = "error",
+          error = { code = "status_failed", message = "failed" },
+        },
+      },
+    },
+  }, 140)
+
+  local groups = {}
+  for _, highlight in ipairs(output.highlights) do
+    groups[highlight.row] = groups[highlight.row] or {}
+    groups[highlight.row][highlight.group] = true
+    assert_truthy(highlight.group ~= "Identifier")
+  end
+  assert_truthy(groups[3].VigitWorktreeRoot)
+  assert_truthy(groups[3].VigitWorktreeClean)
+  assert_truthy(groups[4].VigitWorktreeLinked)
+  assert_truthy(groups[4].VigitWorktreeDirty)
+  assert_truthy(groups[5].VigitWorktreeDetached)
+  assert_truthy(groups[6].VigitWorktreeError)
 end)
 
 it("derives the worktree footer from enabled mappings without overflow", function()

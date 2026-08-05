@@ -101,6 +101,94 @@ local function workspace_window(workspace)
   end
 end
 
+local function normal_window(tab)
+  if not tab or not vim.api.nvim_tabpage_is_valid(tab) then return nil end
+  for _, window in ipairs(vim.api.nvim_tabpage_list_wins(tab)) do
+    if vim.api.nvim_win_get_config(window).relative == "" then
+      return window
+    end
+  end
+end
+
+function M.bind_workspace_root(workspace_or_tab, root)
+  local workspace = type(workspace_or_tab) == "table"
+      and workspace_or_tab
+    or nil
+  local tab = workspace and workspace.tab or workspace_or_tab
+  local canonical_root = type(root) == "string" and canonical_path(root) or nil
+  local stat = canonical_root and vim.uv.fs_stat(canonical_root) or nil
+  if not canonical_root or not stat or stat.type ~= "directory" then
+    return Result.err(
+      "workspace_root_unavailable",
+      "Workspace root is unavailable",
+      root
+    )
+  end
+  if not tab or not vim.api.nvim_tabpage_is_valid(tab) then
+    return Result.err(
+      "workspace_root_failed",
+      "Workspace tab is unavailable"
+    )
+  end
+
+  local previous_tab = vim.api.nvim_get_current_tabpage()
+  local previous_global = vim.fn.getcwd(-1, -1)
+  local window = workspace and workspace_window(workspace) or normal_window(tab)
+  if not window then
+    return Result.err(
+      "workspace_root_failed",
+      "Workspace window is unavailable"
+    )
+  end
+  local previous_tab_cwd = vim.api.nvim_win_call(window, function()
+    return vim.fn.getcwd(0, 0)
+  end)
+
+  local ok, message = xpcall(function()
+    vim.api.nvim_set_current_tabpage(tab)
+    vim.api.nvim_win_call(window, function()
+      -- `nvim_set_current_dir()` only updates the current local directory when
+      -- `:tcd` is active. Use `:cd` first so process-wide integrations
+      -- (terminal, Telescope, NvimTree) observe the same root, then pin the
+      -- workspace tab. `nvim_win_call()` preserves the user's focused window.
+      vim.cmd("cd " .. vim.fn.fnameescape(canonical_root))
+      vim.cmd("tcd " .. vim.fn.fnameescape(canonical_root))
+    end)
+
+    local effective_cwd = vim.api.nvim_win_call(window, function()
+      return vim.fn.getcwd(0, 0)
+    end)
+    if canonical_path(vim.fn.getcwd(-1, -1)) ~= canonical_root
+        or canonical_path(effective_cwd) ~= canonical_root
+        or canonical_path(vim.uv.cwd()) ~= canonical_root then
+      error("workspace cwd invariant was not established")
+    end
+    vim.api.nvim_tabpage_set_var(tab, "vigit_root", canonical_root)
+    vim.api.nvim_tabpage_set_var(tab, "vigit_role", "workspace")
+  end, debug.traceback)
+
+  if not ok then
+    pcall(vim.cmd, "cd " .. vim.fn.fnameescape(previous_global))
+    if vim.api.nvim_tabpage_is_valid(tab) then
+      pcall(vim.api.nvim_set_current_tabpage, tab)
+      if vim.api.nvim_win_is_valid(window) then
+        pcall(vim.api.nvim_win_call, window, function()
+          vim.cmd("tcd " .. vim.fn.fnameescape(previous_tab_cwd))
+        end)
+      end
+    end
+    if vim.api.nvim_tabpage_is_valid(previous_tab) then
+      pcall(vim.api.nvim_set_current_tabpage, previous_tab)
+    end
+    return Result.err(
+      "workspace_root_failed",
+      "Unable to bind the workspace root",
+      message
+    )
+  end
+  return Result.ok(canonical_root)
+end
+
 local function close_timer(timer)
   if timer and not timer:is_closing() then
     timer:stop()
@@ -260,6 +348,55 @@ local function mirrored_source_buffer(target_root, source_root, source_buffer)
   return buffer
 end
 
+function M.source_buffer_kind(root, buffer)
+  if type(root) ~= "string"
+      or not buffer
+      or not vim.api.nvim_buf_is_valid(buffer)
+      or not vim.api.nvim_buf_is_loaded(buffer)
+      or vim.bo[buffer].buftype ~= "" then
+    return nil
+  end
+  local path = canonical_path(vim.api.nvim_buf_get_name(buffer))
+  local canonical_root = canonical_path(root)
+  local stat = path and vim.uv.fs_stat(path) or nil
+  if path == canonical_root and stat and stat.type == "directory" then
+    return "directory"
+  end
+  if path and canonical_root and stat and stat.type == "file"
+      and is_within(canonical_root, path) then
+    return "file"
+  end
+end
+
+function M.editor_source(workspace, root, current_buffer)
+  local candidates = { current_buffer }
+  if type(workspace) == "table"
+      and workspace.code_win
+      and vim.api.nvim_win_is_valid(workspace.code_win) then
+    candidates[#candidates + 1] = vim.api.nvim_win_get_buf(workspace.code_win)
+  end
+  local seen = {}
+  for _, buffer in ipairs(candidates) do
+    if buffer and not seen[buffer] then
+      seen[buffer] = true
+      local kind = M.source_buffer_kind(root, buffer)
+      if kind then return buffer, kind end
+    end
+  end
+  return nil, nil
+end
+
+local function directory_source_buffer(target_root, source_kind)
+  if source_kind ~= "directory" then return nil end
+  local target_path = canonical_path(target_root)
+  local stat = target_path and vim.uv.fs_stat(target_path) or nil
+  if not stat or stat.type ~= "directory" then return nil end
+  local buffer = vim.fn.bufadd(target_path)
+  vim.fn.bufload(buffer)
+  vim.bo[buffer].buflisted = true
+  return buffer
+end
+
 function M.show_editor(session, workspace, opts)
   opts = opts or {}
   local result
@@ -270,6 +407,7 @@ function M.show_editor(session, workspace, opts)
         opts.source_root,
         opts.source_buffer
       )
+      or directory_source_buffer(session.root, opts.source_kind)
     if not buffer then
       result = Result.ok(nil)
       return
@@ -372,6 +510,8 @@ function M.open_file(context, done)
   local result
   local ok, message = xpcall(function()
     local workspace = context.workspace
+    local rooted = M.bind_workspace_root(workspace, context.root)
+    if not rooted.ok then error(rooted.error.message) end
     local window = workspace_window(workspace)
     if not window then
       error("Vigit workspace is unavailable")
@@ -594,6 +734,8 @@ function M.open_terminal(context, done)
   local workspace = context.workspace
   local resources = context.resources
   local ok, message = xpcall(function()
+    local rooted = M.bind_workspace_root(workspace, context.root)
+    if not rooted.ok then error(rooted.error.message) end
     local code_window = workspace_window(workspace)
     if not code_window or type(resources) ~= "table" then
       error("Vigit workspace is unavailable")

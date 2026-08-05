@@ -230,14 +230,6 @@ controller.configure({
   },
 })
 
-local function current_path()
-  local buffer_path = vim.api.nvim_buf_get_name(0)
-  if buffer_path ~= "" and not buffer_path:match("^%a+://") then
-    return buffer_path, "code_buffer"
-  end
-  return vim.uv.cwd(), "cwd"
-end
-
 local function current_workspace()
   if not workspace
       or not workspace.tab
@@ -246,6 +238,25 @@ local function current_workspace()
     return nil
   end
   return workspace
+end
+
+local function current_path()
+  local buffer = vim.api.nvim_get_current_buf()
+  local buffer_path = vim.api.nvim_buf_get_name(buffer)
+  if vim.bo[buffer].buftype == ""
+      and buffer_path ~= ""
+      and not buffer_path:match("^%a+://") then
+    return buffer_path, "code_buffer"
+  end
+  local active = current_workspace()
+  if active and active.root then
+    local source_buffer = neovim.editor_source(active, active.root, buffer)
+    if source_buffer then
+      return vim.api.nvim_buf_get_name(source_buffer), "workspace_source"
+    end
+    return active.root, "workspace_root"
+  end
+  return vim.fn.getcwd(0, 0), "effective_cwd"
 end
 
 local function invocation_mode()
@@ -327,6 +338,7 @@ worktrees = Worktrees.new({
         local restored = neovim.show_editor(session, workspace, {
           source_root = opts.source_root,
           source_buffer = opts.source_buffer,
+          source_kind = opts.source_kind,
         })
         if not restored.ok then return restored end
         if restored.value then
@@ -370,27 +382,19 @@ local function normal_window(tab)
   return vim.api.nvim_tabpage_get_win(tab)
 end
 
-local function set_workspace_root(tab, root)
-  local ok, message = xpcall(function()
-    if not tab or not vim.api.nvim_tabpage_is_valid(tab) then
-      error("workspace tab is unavailable")
-    end
-    vim.api.nvim_set_current_tabpage(tab)
-    local window = normal_window(tab)
-    vim.api.nvim_win_call(window, function()
-      vim.cmd("tcd " .. vim.fn.fnameescape(root))
-    end)
-    vim.api.nvim_tabpage_set_var(tab, "vigit_root", root)
-    vim.api.nvim_tabpage_set_var(tab, "vigit_role", "workspace")
-  end, debug.traceback)
-  if not ok then
-    return Result.err(
-      "workspace_root_failed",
-      "Unable to set workspace root",
-      message
-    )
+local function set_workspace_root(active, root)
+  local result = neovim.bind_workspace_root(active, root)
+  if result.ok then
+    log.event("workspace_root_bound", {
+      root = result.value,
+      global_cwd = vim.fn.getcwd(-1, -1),
+      tab_cwd = vim.fn.getcwd(0, 0),
+      process_cwd = vim.uv.cwd(),
+    })
+  else
+    log.push(result.error)
   end
-  return Result.ok(root)
+  return result
 end
 
 local function create_session(root, snapshot)
@@ -545,9 +549,15 @@ function M.worktrees(opts)
   elseif not context_session and active and active.root == root then
     context_session = active
   end
-  local source_buffer = return_mode == "code"
-      and vim.api.nvim_get_current_buf()
-    or nil
+  local source_buffer
+  local source_kind
+  if return_mode == "code" then
+    source_buffer, source_kind = neovim.editor_source(
+      workspace,
+      root,
+      vim.api.nvim_get_current_buf()
+    )
+  end
   if return_mode == "code" and context_session and not context_session.closed then
     neovim.remember_source_buffer(
       context_session.resources,
@@ -563,6 +573,7 @@ function M.worktrees(opts)
     return_mode = return_mode,
     source_root = root,
     source_buffer = source_buffer,
+    source_kind = source_kind,
     selected_path = root,
   })
 end

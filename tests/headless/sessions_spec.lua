@@ -101,7 +101,6 @@ it("keeps independent sessions as overlays in one workspace tab", function()
   local repo_a = Fixture.new()
   local repo_b = Fixture.new()
   local sessions = {}
-  local original_cwd = vim.fn.getcwd(-1, -1)
   local ok, message = xpcall(function()
     local a = assert(v2.open({ cwd = repo_a.root }))
     local b = assert(v2.open({ cwd = repo_b.root }))
@@ -123,7 +122,7 @@ it("keeps independent sessions as overlays in one workspace tab", function()
     local again = assert(v2.open({ cwd = repo_a.root .. "/" }))
     assert_equal(again.id, a.id)
     assert_equal(vim.api.nvim_get_current_tabpage(), a.owned.tab)
-    assert_equal(vim.fn.getcwd(-1, -1), original_cwd)
+    assert_equal(vim.fn.getcwd(-1, -1), a.root)
     assert_equal(vim.fn.getcwd(0, 0), a.root)
     assert_equal(b.owned.diff_win, nil)
     assert_equal(b.owned.changes_win, nil)
@@ -157,7 +156,7 @@ it("keeps independent sessions as overlays in one workspace tab", function()
     assert_equal(a.closed, false)
     assert_truthy(vim.api.nvim_tabpage_is_valid(a.owned.tab))
     assert_equal(b.closed, false)
-    assert_equal(vim.fn.getcwd(-1, -1), original_cwd)
+    assert_equal(vim.fn.getcwd(-1, -1), a.root)
   end, debug.traceback)
 
   for _, session in ipairs(sessions) do
@@ -534,6 +533,29 @@ it("keeps changes in a toggleable overlay below eighty columns", function()
   if not ok then
     error(message, 0)
   end
+end)
+
+it("поддерживает Ctrl-W со стрелками при русской раскладке", function()
+  local repo = Fixture.new()
+  local session
+  local ok, message = xpcall(function()
+    session = assert(v2.open({ cwd = repo.root }))
+    vim.api.nvim_set_current_win(session.owned.changes_win)
+
+    local left = vim.fn.maparg("<C-ц><Left>", "n", false, true)
+    local right = vim.fn.maparg("<C-ц><Right>", "n", false, true)
+    assert_equal(left.buffer, 1)
+    assert_equal(right.buffer, 1)
+
+    vim.api.nvim_feedkeys(vim.keycode("<C-ц><Left>"), "x", false)
+    assert_equal(vim.api.nvim_get_current_win(), session.owned.diff_win)
+    vim.api.nvim_feedkeys(vim.keycode("<C-ц><Right>"), "x", false)
+    assert_equal(vim.api.nvim_get_current_win(), session.owned.changes_win)
+  end, debug.traceback)
+
+  close_session(session)
+  repo:cleanup()
+  if not ok then error(message, 0) end
 end)
 
 it("resizes only the active session and restores a cached session on reopen", function()

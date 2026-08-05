@@ -138,6 +138,17 @@ it("повторное открытие active root только показыв�
   assert_equal(calls.mounted[#calls.mounted], active)
 end)
 
+it("повторно привязывает active root при входе в code и review", function()
+  local deps, calls = fake_dependencies()
+  local workspace = Workspace.new(deps)
+
+  assert_truthy(workspace:open("/repo-a").ok)
+  assert_truthy(workspace:show_code().ok)
+  assert_truthy(workspace:show_review().ok)
+
+  assert_equal(calls.roots, { "/repo-a", "/repo-a", "/repo-a" })
+end)
+
 it("восстанавливает предыдущий root при ошибке activation", function()
   local deps, calls = fake_dependencies()
   deps.set_root = function(_, root)

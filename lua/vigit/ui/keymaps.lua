@@ -12,8 +12,8 @@ local hint_labels = {
 
 local entries = {
   { id = "view.toggle_focus", modes = { "n" }, lhs = "<Tab>", contexts = { "diff", "changes" }, group = "view", description = "Switch diff and changes", intent = "toggle_focus" },
-  { id = "view.focus_left", modes = { "n" }, lhs = "<C-w><Left>", contexts = { "diff", "changes" }, group = "view", description = "Focus left Vigit pane", intent = "focus_left", hint = false },
-  { id = "view.focus_right", modes = { "n" }, lhs = "<C-w><Right>", contexts = { "diff", "changes" }, group = "view", description = "Focus right Vigit pane", intent = "focus_right", hint = false },
+  { id = "view.focus_left", modes = { "n" }, lhs = "<C-w><Left>", aliases = { "<C-ц><Left>" }, contexts = { "diff", "changes" }, group = "view", description = "Focus left Vigit pane", intent = "focus_left", hint = false },
+  { id = "view.focus_right", modes = { "n" }, lhs = "<C-w><Right>", aliases = { "<C-ц><Right>" }, contexts = { "diff", "changes" }, group = "view", description = "Focus right Vigit pane", intent = "focus_right", hint = false },
   { id = "change.activate", modes = { "n" }, lhs = "<CR>", contexts = { "changes" }, group = "navigation", description = "Open change or toggle directory", intent = "activate" },
   { id = "change.next_file", modes = { "n" }, lhs = "]f", contexts = { "diff", "changes" }, group = "navigation", description = "Select next file", intent = "next_file" },
   { id = "navigation.open_file", modes = { "n" }, lhs = "e", contexts = { "diff", "changes" }, group = "navigation", description = "Open source file", intent = "open_file" },
@@ -134,6 +134,14 @@ function M.active_entries(configured)
   return result
 end
 
+local function bindings(entry)
+  local result = { entry.lhs }
+  for _, alias in ipairs(entry.aliases or {}) do
+    result[#result + 1] = alias
+  end
+  return result
+end
+
 setmetatable(entries, {
   __call = function(_, context, configured)
     if context == nil then return entries end
@@ -178,7 +186,7 @@ function M.render_markdown(configured)
         lines[#lines + 1] = string.format(
           "| %s | %s | `%s` | %s |",
           table.concat(entry.contexts, ", "), table.concat(entry.modes, "/"),
-          entry.lhs, entry.description
+          table.concat(bindings(entry), " / "), entry.description
         )
       end
     end
@@ -193,11 +201,13 @@ end
 
 local function apply_context(session, buffer, name)
   for _, entry in ipairs(M.for_context(name, mapping_config())) do
-    vim.keymap.set(entry.modes, entry.lhs, function()
-      require("vigit.ui.controller").dispatch(session, entry.intent)
-    end, {
-      buffer = buffer, desc = "Vigit: " .. entry.description, noremap = true, silent = true,
-    })
+    for _, lhs in ipairs(bindings(entry)) do
+      vim.keymap.set(entry.modes, lhs, function()
+        require("vigit.ui.controller").dispatch(session, entry.intent)
+      end, {
+        buffer = buffer, desc = "Vigit: " .. entry.description, noremap = true, silent = true,
+      })
+    end
   end
 end
 
@@ -248,9 +258,11 @@ function M.apply_aux(session, buffer, name, handlers)
       callback = function() require("vigit.ui.views.help").open(name) end
     end
     if callback then
-      vim.keymap.set(entry.modes, entry.lhs, callback, {
-        buffer = buffer, desc = "Vigit: " .. entry.description, noremap = true, silent = true,
-      })
+      for _, lhs in ipairs(bindings(entry)) do
+        vim.keymap.set(entry.modes, lhs, callback, {
+          buffer = buffer, desc = "Vigit: " .. entry.description, noremap = true, silent = true,
+        })
+      end
     end
   end
 end

@@ -2,6 +2,7 @@ local Fixture = require("tests.fixtures.git_repo")
 local controller = require("vigit.ui.controller")
 local layout = require("vigit.ui.layout")
 local log = require("vigit.ui.log")
+local neovim = require("vigit.adapters.neovim")
 local renderer = require("vigit.ui.renderer")
 local v2 = require("vigit.v2")
 
@@ -79,6 +80,47 @@ local function cleanup_terminals()
     end
   end
 end
+
+it("публикует workspace root для global, tab и process consumers", function()
+  local repo = Fixture.new()
+  local original_global = vim.fn.getcwd(-1, -1)
+  local original_tab = vim.fn.getcwd(0, 0)
+  local group = vim.api.nvim_create_augroup("VigitRootInvariantSpec", {
+    clear = true,
+  })
+  local observed = {}
+  vim.api.nvim_create_autocmd("DirChanged", {
+    group = group,
+    callback = function()
+      observed[#observed + 1] = {
+        global = vim.fn.getcwd(-1, -1),
+        tab = vim.fn.getcwd(0, 0),
+        process = vim.uv.cwd(),
+      }
+    end,
+  })
+
+  local ok, message = xpcall(function()
+    local rooted = neovim.bind_workspace_root(
+      vim.api.nvim_get_current_tabpage(),
+      repo.root
+    )
+    assert_truthy(rooted.ok)
+    local expected = assert(vim.uv.fs_realpath(repo.root))
+    assert_equal(vim.fn.getcwd(-1, -1), expected)
+    assert_equal(vim.fn.getcwd(0, 0), expected)
+    assert_equal(vim.uv.cwd(), expected)
+    assert_truthy(#observed >= 1)
+    assert_equal(observed[1].global, expected)
+    assert_equal(observed[1].process, expected)
+  end, debug.traceback)
+
+  vim.api.nvim_del_augroup_by_id(group)
+  vim.cmd("cd " .. vim.fn.fnameescape(original_global))
+  vim.cmd("tcd " .. vim.fn.fnameescape(original_tab))
+  repo:cleanup()
+  if not ok then error(message, 0) end
+end)
 
 it("показывает review overlay в текущем tab и скрывает его без закрытия session", function()
   local repo = Fixture.new()

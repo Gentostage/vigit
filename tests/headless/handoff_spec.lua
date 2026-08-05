@@ -116,7 +116,6 @@ it("hands identical relative paths to distinct buffers in one workspace tab", fu
   local source_tabs = {}
   local source_buffers = {}
   local extra_buffers = {}
-  local original_cwd = vim.fn.getcwd(-1, -1)
   local ok, message = xpcall(function()
     prepare_repo(repo_a, {
       ["src/service.py"] = {
@@ -188,7 +187,7 @@ it("hands identical relative paths to distinct buffers in one workspace tab", fu
     assert_equal(tab_var(tab_a, "vigit_role"), "workspace")
     assert_equal(tab_var(tab_b, "vigit_role"), "workspace")
     assert_equal(tab_cwd(tab_b), session_b.root)
-    assert_equal(vim.fn.getcwd(-1, -1), original_cwd)
+    assert_equal(vim.fn.getcwd(-1, -1), session_b.root)
     assert_truthy(tab_var(tab_b, "vigit_label"):find("service.py", 1, true))
     assert_equal(session_a.owned.tab, tab_a)
     assert_equal(session_b.owned.tab, tab_b)
@@ -246,7 +245,7 @@ it("hands identical relative paths to distinct buffers in one workspace tab", fu
     assert_equal(vim.api.nvim_tabpage_is_valid(tab_b), true)
     assert_equal(vim.api.nvim_buf_is_valid(buf_a), true)
     assert_equal(vim.api.nvim_buf_is_valid(buf_b), true)
-    assert_equal(vim.fn.getcwd(-1, -1), original_cwd)
+    assert_equal(vim.fn.getcwd(-1, -1), session_a.root)
     local cursor_a = vim.api.nvim_win_get_cursor(vim.fn.bufwinid(other_buf))
     assert_equal(cursor_a[1], target_other.source_line)
     assert_equal(cursor_a[2], 2)
@@ -1073,7 +1072,7 @@ it("opens a user-owned terminal split rooted at the current worktree", function(
     assert_equal(terminal_tab, session.owned.tab)
     assert_equal(tab_var(terminal_tab, "vigit_role"), "workspace")
     assert_truthy(tab_var(terminal_tab, "vigit_label"):find("TERM", 1, true))
-    assert_equal(vim.fn.getcwd(-1, -1), original_global_cwd)
+    assert_equal(vim.fn.getcwd(-1, -1), session.root)
     assert_equal(vim.fn.getcwd(0, 0), session.root)
     for _, mapping in ipairs(vim.api.nvim_buf_get_keymap(
       terminal_buffer,
@@ -1099,6 +1098,8 @@ it("opens a user-owned terminal split rooted at the current worktree", function(
   close_session(session)
   close_tab(terminal_tab)
   delete_buffer(terminal_buffer)
+  vim.cmd("cd " .. vim.fn.fnameescape(original_global_cwd))
+  vim.cmd("tcd " .. vim.fn.fnameescape(original_tab_cwd))
   repo:cleanup()
   if not ok then
     error(message, 0)

@@ -54,6 +54,21 @@ it("renders inline help and Markdown from the active registry", function()
   assert_equal(markdown:sub(-2), "|\n")
 end)
 
+it("документирует русские aliases для оконной навигации", function()
+  local markdown = keymaps.render_markdown()
+
+  assert_truthy(markdown:find(
+    "`<C-w><Left> / <C-ц><Left>`",
+    1,
+    true
+  ) ~= nil)
+  assert_truthy(markdown:find(
+    "`<C-w><Right> / <C-ц><Right>`",
+    1,
+    true
+  ) ~= nil)
+end)
+
 it("builds display-width-safe auxiliary hints from active mappings", function()
   local hints = keymaps.hints("worktrees", 16, {
     keymaps = { ["worktrees.fetch"] = false },

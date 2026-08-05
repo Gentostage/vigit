@@ -50,8 +50,8 @@ end
 assert(#tests > 0, "headless test runner loaded zero tests")
 if using_default_files then
   assert(
-    #tests == 119,
-    string.format("expected 119 default headless tests, loaded %d", #tests)
+    #tests == 124,
+    string.format("expected 124 default headless tests, loaded %d", #tests)
   )
 end
 
@@ -68,6 +68,8 @@ for _, test in ipairs(tests) do
     )
   end
   io.stdout:flush()
+  pcall(vim.cmd, "cd " .. vim.fn.fnameescape(project_root))
+  pcall(vim.cmd, "tcd " .. vim.fn.fnameescape(project_root))
 end
 
 vim.cmd(failed == 0 and "qa!" or "cquit " .. failed)

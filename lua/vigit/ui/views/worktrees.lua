@@ -119,6 +119,44 @@ local function narrow_details(row, maximum)
   return "  " .. status(row, math.max(1, maximum - 2))
 end
 
+local function has_probe_error(row)
+  if row.error then return true end
+  for _, value in pairs(row.probes or {}) do
+    if value.state == "error" then return true end
+  end
+  return false
+end
+
+local function is_dirty(row)
+  local files = row.files or {}
+  return (files.staged or 0) > 0
+    or (files.unstaged or 0) > 0
+    or (files.untracked or 0) > 0
+end
+
+local function state_group(row)
+  if has_probe_error(row) then return "VigitWorktreeError" end
+  if is_dirty(row) then return "VigitWorktreeDirty" end
+  if row.detached
+      or (row.upstream and row.upstream.state == "detached") then
+    return "VigitWorktreeDetached"
+  end
+  if row.upstream and row.upstream.state == "no_upstream" then
+    return "VigitWorktreeDetached"
+  end
+  if row.active then return "VigitWorktreeActive" end
+  return "VigitWorktreeClean"
+end
+
+local function add_highlight(output, row, group, start_col, end_col)
+  output.highlights[#output.highlights + 1] = {
+    row = row,
+    group = group,
+    start_col = start_col,
+    end_col = end_col,
+  }
+end
+
 function M.render(rows, maximum, selected_path, error)
   maximum = math.max(1, maximum or 20)
   local output = { lines = { "WORKTREES" }, targets = {}, highlights = {} }
@@ -141,29 +179,79 @@ function M.render(rows, maximum, selected_path, error)
   end
   for _, row in ipairs(rows or {}) do
     local type_label = row.kind == "root" and "ROOT" or "WT"
+    local type_group = row.kind == "root"
+        and "VigitWorktreeRoot"
+      or "VigitWorktreeLinked"
     local first
+    local spans
     if wide then
       local layout = output.layout
+      local type_text = pad(type_label, layout.type)
+      local name_text = pad(row.name, layout.name)
+      local branch_text = pad(branch(row), layout.branch)
+      local status_text = pad(status(row, layout.status), layout.status)
       first = table.concat({
-        pad(type_label, layout.type),
-        pad(row.name, layout.name),
-        pad(branch(row), layout.branch),
-        pad(status(row, layout.status), layout.status),
+        type_text, name_text, branch_text, status_text,
       }, "  ")
+      local name_start = #type_text + 2
+      local branch_start = name_start + #name_text + 2
+      local status_start = branch_start + #branch_text + 2
+      spans = {
+        { group = type_group, start_col = 0, end_col = #type_label },
+        {
+          group = type_group,
+          start_col = name_start,
+          end_col = name_start + #shorten(row.name, layout.name),
+        },
+        {
+          group = row.detached
+              and "VigitWorktreeDetached"
+            or "VigitWorktreeBranch",
+          start_col = branch_start,
+          end_col = branch_start + #shorten(branch(row), layout.branch),
+        },
+        {
+          group = state_group(row),
+          start_col = status_start,
+          end_col = status_start + #shorten(status(row, layout.status), layout.status),
+        },
+      }
     else
       first = string.format("%s  %s · %s", type_label, row.name, branch(row))
+      local name_start = #type_label + 2
+      local branch_start = name_start + #row.name + 3
+      spans = {
+        { group = type_group, start_col = 0, end_col = #type_label },
+        {
+          group = type_group,
+          start_col = name_start,
+          end_col = name_start + #row.name,
+        },
+        {
+          group = row.detached
+              and "VigitWorktreeDetached"
+            or "VigitWorktreeBranch",
+          start_col = branch_start,
+          end_col = branch_start + #branch(row),
+        },
+      }
     end
     first = shorten(first, maximum)
     output.lines[#output.lines + 1] = first
     local target = { row = #output.lines, path = row.path, entry = row }
     output.targets[#output.targets + 1] = target
-    output.highlights[#output.highlights + 1] = {
-      row = target.row,
-      group = row.kind == "root" and "Title" or "Identifier",
-    }
+    for _, span in ipairs(spans) do
+      add_highlight(
+        output,
+        target.row,
+        span.group,
+        span.start_col,
+        span.end_col
+      )
+    end
     if not wide then
       output.lines[#output.lines + 1] = shorten(narrow_details(row, maximum), maximum)
-      output.highlights[#output.highlights + 1] = { row = #output.lines, group = "Comment" }
+      add_highlight(output, #output.lines, state_group(row), 0, -1)
     end
   end
   if #(rows or {}) == 0 then
@@ -192,7 +280,14 @@ local function set_lines(picker, output)
   vim.bo[picker.buf].modifiable = false
   vim.api.nvim_buf_clear_namespace(picker.buf, picker.namespace, 0, -1)
   for _, highlight in ipairs(output.highlights) do
-    vim.api.nvim_buf_add_highlight(picker.buf, picker.namespace, highlight.group, highlight.row - 1, 0, -1)
+    vim.api.nvim_buf_add_highlight(
+      picker.buf,
+      picker.namespace,
+      highlight.group,
+      highlight.row - 1,
+      highlight.start_col or 0,
+      highlight.end_col or -1
+    )
   end
   picker.targets = output.targets
   picker.row_by_path = {}
@@ -299,6 +394,7 @@ function M.open(opts)
     return_mode = opts.return_mode or "review",
     source_root = opts.source_root,
     source_buffer = opts.source_buffer,
+    source_kind = opts.source_kind,
     rows = {},
     targets = {},
     row_by_path = {},
@@ -361,6 +457,7 @@ function M.open(opts)
       mode = self.return_mode,
       source_root = self.source_root,
       source_buffer = self.source_buffer,
+      source_kind = self.source_kind,
     })
     pending.cancel = handle and handle.cancel
   end
