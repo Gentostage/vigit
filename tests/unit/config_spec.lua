@@ -12,6 +12,10 @@ it("deep merges supported options", function()
   assert_equal(result.value.refresh.debounce_ms, 50)
   assert_equal(result.value.refresh.on_focus, true)
   assert_equal(result.value.refresh.poll_interval_ms, 2000)
+  assert_equal(result.value.ui.diff_concurrency, 8)
+  assert_equal(result.value.ui.render_delay_ms, 16)
+  assert_equal(result.value.ui.syntax_margin_screens, 1)
+  assert_equal(result.value.ui.syntax_cache_entries, 64)
 end)
 
 it("rejects unknown and invalid options with a full path", function()
@@ -32,6 +36,28 @@ it("rejects unknown and invalid options with a full path", function()
     assert_equal(rejected.ok, false)
     assert_equal(rejected.error.code, "invalid_config")
     assert_truthy(rejected.error.message:match("refresh%.poll_interval_ms"))
+  end
+
+  for _, option in ipairs({
+    "diff_concurrency",
+    "render_delay_ms",
+    "syntax_cache_entries",
+  }) do
+    for _, value in ipairs({ 0, -1, 1.5 }) do
+      local rejected = config.resolve({ ui = { [option] = value } })
+      assert_equal(rejected.ok, false)
+      assert_equal(rejected.error.code, "invalid_config")
+      assert_truthy(rejected.error.message:match("ui%." .. option))
+    end
+  end
+
+  assert_equal(config.resolve({
+    ui = { syntax_margin_screens = 0 },
+  }).ok, true)
+  for _, value in ipairs({ -1, 1.5 }) do
+    local rejected = config.resolve({ ui = { syntax_margin_screens = value } })
+    assert_equal(rejected.ok, false)
+    assert_truthy(rejected.error.message:match("ui%.syntax_margin_screens"))
   end
 end)
 

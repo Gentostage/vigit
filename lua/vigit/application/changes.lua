@@ -1,6 +1,7 @@
 local anchor = require("vigit.core.anchor")
 local config = require("vigit.config")
 local ErrorState = require("vigit.application.error_state")
+local DiffBatch = require("vigit.application.diff_batch")
 
 local M = {}
 local EXPANDED_CONTEXT_LINES = 9999
@@ -68,6 +69,8 @@ function M.expose_error(session)
 end
 
 local function clear_pending_diffs(session)
+  cancel_job(session.view.all_files.batch)
+  session.view.all_files.batch = nil
   session.busy.diff = {}
   session.view.all_files.loading = {}
   ensure_errors(session).diffs = {}
@@ -176,8 +179,8 @@ function M.new(opts)
   }, Changes)
 end
 
-function Changes:notify(session)
-  self.on_change(session)
+function Changes:notify(session, event)
+  self.on_change(session, event)
 end
 
 function Changes:current(session, generation)
@@ -205,45 +208,37 @@ function Changes:probe(session, on_complete)
   end
 end
 
-function Changes:load_diff(
-    session,
-    change_id,
-    generation,
-    context_lines,
-    on_complete,
-    on_failure,
-    previous_diff
-)
-  if session.closed then
-    return
-  end
+function Changes:_load_diff(session, change_id, opts)
+  opts = opts or {}
+  if session.closed then return false end
 
   local change = change_for(session.data.status, change_id)
-  if not change then
-    return
-  end
+  if not change then return false end
 
-  generation = generation or session.reads.generation
+  local generation = opts.generation or session.reads.generation
   local job_key = "diff:" .. change_id
   cancel_job(session.reads.jobs[job_key])
   local request = {}
-  session.busy.diff = session.busy.diff or {}
-  session.busy.diff[change_id] = true
-  session.view.all_files.loading[change_id] = true
-  ensure_errors(session).diffs[change_id] = nil
-  expose_error(session)
+  if not opts.prepared then
+    session.busy.diff = session.busy.diff or {}
+    session.busy.diff[change_id] = true
+    session.view.all_files.loading[change_id] = true
+    ensure_errors(session).diffs[change_id] = nil
+    expose_error(session)
+  end
   session.reads.jobs[job_key] = request
-  self:notify(session)
+  if opts.notify ~= false then self:notify(session) end
 
   local ui = config.get().ui
-  local applied_diff = previous_diff or session.data.diffs[change_id]
+  local applied_diff = opts.previous_diff or session.data.diffs[change_id]
   local handle = self.git:diff(
     session.root,
     change,
-    context_lines or context_lines_for(session, change_id),
+    opts.context_lines or context_lines_for(session, change_id),
     ui.max_diff_bytes,
     function(result)
-      if not self:current(session, generation) or session.reads.jobs[job_key] ~= request then
+      if not self:current(session, generation)
+          or session.reads.jobs[job_key] ~= request then
         return
       end
 
@@ -277,21 +272,36 @@ function Changes:load_diff(
         session.view.all_files.loaded[change_id] = true
         ensure_errors(session).diffs[change_id] = nil
       else
-        if on_failure then
-          on_failure(result)
-        end
+        if opts.on_failure then opts.on_failure(result) end
         ensure_errors(session).diffs[change_id] = result.error
       end
       expose_error(session)
-      self:notify(session)
-      if on_complete then
-        on_complete(result)
+      if opts.notify ~= false then
+        self:notify(session, { kind = "diff", phase = "complete" })
       end
+      if opts.on_complete then opts.on_complete(result) end
     end
   )
-  if session.reads.jobs[job_key] == request then
-    request.handle = handle
-  end
+  if session.reads.jobs[job_key] == request then request.handle = handle end
+  return true
+end
+
+function Changes:load_diff(
+    session,
+    change_id,
+    generation,
+    context_lines,
+    on_complete,
+    on_failure,
+    previous_diff
+)
+  return self:_load_diff(session, change_id, {
+    generation = generation,
+    context_lines = context_lines,
+    on_complete = on_complete,
+    on_failure = on_failure,
+    previous_diff = previous_diff,
+  })
 end
 
 function Changes:toggle_context(session, change_id, hunk_id, on_complete)
@@ -373,8 +383,26 @@ function Changes:refresh(session, on_complete)
         load_ids[1] = selected_change_id
       end
 
-      for _, change_id in ipairs(load_ids) do
-        local current_change_id = change_id
+      if session.view.diff_mode == "all_files" and #load_ids > 0 then
+        self:load_all_visible(session, load_ids, {
+          generation = generation,
+          previous_diffs = previous_diffs,
+          on_complete = function(current_change_id, diff_result)
+            if on_complete then
+              on_complete({
+                phase = "diff",
+                generation = generation,
+                change_id = current_change_id,
+                result = diff_result,
+              })
+            end
+          end,
+          on_failure = function(current_change_id)
+            rollback_change_context(session, current_change_id)
+          end,
+        })
+      elseif #load_ids > 0 then
+        local current_change_id = load_ids[1]
         self:load_diff(
           session,
           current_change_id,
@@ -397,7 +425,7 @@ function Changes:refresh(session, on_complete)
         )
       end
       if #load_ids == 0 then
-        self:notify(session)
+        self:notify(session, { kind = "status", phase = "complete" })
       end
       if on_complete then
         local loading = {}
@@ -414,7 +442,7 @@ function Changes:refresh(session, on_complete)
     else
       ensure_errors(session).status = result.error
       expose_error(session)
-      self:notify(session)
+      self:notify(session, { kind = "status", phase = "complete" })
       if on_complete then
         on_complete({
           phase = "status",
@@ -439,14 +467,69 @@ function Changes:select(session, change_id)
   self:load_diff(session, change_id)
 end
 
-function Changes:load_all_visible(session, ids)
+function Changes:load_all_visible(session, ids, opts)
   if session.closed then
     return
   end
-
-  for _, change_id in ipairs(ids) do
-    self:load_diff(session, change_id)
+  opts = opts or {}
+  cancel_job(session.view.all_files.batch)
+  local generation = opts.generation or session.reads.generation
+  local ordered_ids = {}
+  local seen = {}
+  local selected = session.view.selected_change_id
+  if selected then
+    for _, change_id in ipairs(ids) do
+      if change_id == selected and change_for(session.data.status, change_id) then
+        ordered_ids[#ordered_ids + 1] = change_id
+        seen[change_id] = true
+        break
+      end
+    end
   end
+  for _, change_id in ipairs(ids) do
+    if not seen[change_id] and change_for(session.data.status, change_id) then
+      ordered_ids[#ordered_ids + 1] = change_id
+      seen[change_id] = true
+    end
+  end
+
+  session.busy.diff = session.busy.diff or {}
+  for _, change_id in ipairs(ordered_ids) do
+    session.busy.diff[change_id] = true
+    session.view.all_files.loading[change_id] = true
+    ensure_errors(session).diffs[change_id] = nil
+  end
+  expose_error(session)
+
+  local request = {}
+  session.view.all_files.batch = request
+  request.handle = DiffBatch.run(ordered_ids, {
+    concurrency = config.get().ui.diff_concurrency,
+    start = function(change_id, done)
+      local started = self:_load_diff(session, change_id, {
+        generation = generation,
+        notify = false,
+        prepared = true,
+        previous_diff = opts.previous_diffs and opts.previous_diffs[change_id],
+        on_failure = function(result)
+          if opts.on_failure then opts.on_failure(change_id, result) end
+        end,
+        on_complete = function(result)
+          if opts.on_complete then opts.on_complete(change_id, result) end
+          done(result)
+        end,
+      })
+      if not started then done(nil) end
+    end,
+    phase = function(phase)
+      if not self:current(session, generation)
+          or session.view.all_files.batch ~= request then
+        return
+      end
+      if phase == "complete" then session.view.all_files.batch = nil end
+      self:notify(session, { kind = "diff_batch", phase = phase })
+    end,
+  })
 end
 
 return M

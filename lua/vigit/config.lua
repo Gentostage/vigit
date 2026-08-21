@@ -10,6 +10,10 @@ local defaults = {
     context_lines = 3,
     max_diff_bytes = 2 * 1024 * 1024,
     max_highlight_bytes = 512 * 1024,
+    diff_concurrency = 8,
+    render_delay_ms = 16,
+    syntax_margin_screens = 1,
+    syntax_cache_entries = 64,
   },
   refresh = {
     on_write = true,
@@ -33,6 +37,10 @@ local schema = {
     context_lines = "number",
     max_diff_bytes = "number",
     max_highlight_bytes = "number",
+    diff_concurrency = "integer",
+    render_delay_ms = "integer",
+    syntax_margin_screens = "integer",
+    syntax_cache_entries = "integer",
   },
   refresh = {
     on_write = "boolean",
@@ -141,6 +149,17 @@ function M.resolve(user_opts)
   end
   if value.refresh.poll_interval_ms < 0 then
     return invalid("refresh.poll_interval_ms", "a non-negative integer")
+  end
+  for _, option in ipairs({ "diff_concurrency", "render_delay_ms" }) do
+    if value.ui[option] <= 0 then
+      return invalid("ui." .. option, "a positive integer")
+    end
+  end
+  if value.ui.syntax_margin_screens < 0 then
+    return invalid("ui.syntax_margin_screens", "a non-negative integer")
+  end
+  if value.ui.syntax_cache_entries <= 0 then
+    return invalid("ui.syntax_cache_entries", "a positive integer")
   end
   return Result.ok(value)
 end

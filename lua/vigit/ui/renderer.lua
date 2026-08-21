@@ -6,6 +6,8 @@ local config = require("vigit.config")
 local changes_view = require("vigit.ui.views.changes")
 local diff_view = require("vigit.ui.views.diff")
 local diff_highlights = require("vigit.ui.highlights")
+local viewport = require("vigit.ui.viewport")
+local SyntaxCache = require("vigit.ui.syntax_cache")
 
 local M = {}
 
@@ -16,6 +18,7 @@ local syntax_dependencies = {
 }
 local namespaces = setmetatable({}, { __mode = "k" })
 local syntax_states = setmetatable({}, { __mode = "k" })
+local syntax_caches = setmetatable({}, { __mode = "k" })
 local targets = {}
 local comment_rows = {}
 
@@ -42,7 +45,9 @@ local function session_namespaces(session)
     changes_targets = vim.api.nvim_create_namespace(
       prefix .. "-changes-targets"
     ),
-    diff = vim.api.nvim_create_namespace(prefix .. "-diff"),
+    diff_structure = vim.api.nvim_create_namespace(prefix .. "-diff-structure"),
+    diff_syntax = vim.api.nvim_create_namespace(prefix .. "-diff-syntax"),
+    diff_symbols = vim.api.nvim_create_namespace(prefix .. "-diff-symbols"),
     diff_targets = vim.api.nvim_create_namespace(prefix .. "-diff-targets"),
     diff_status = vim.api.nvim_create_namespace(prefix .. "-diff-status"),
     comments = vim.api.nvim_create_namespace(prefix .. "-comments"),
@@ -122,13 +127,7 @@ local function add_targets(buffer, namespace, output)
   end
 end
 
-local function apply(
-    buffer,
-    namespace,
-    target_namespace,
-    output,
-    inspections
-)
+local function apply(buffer, namespace, target_namespace, output)
   if not valid_buffer(buffer) then
     return
   end
@@ -138,12 +137,7 @@ local function apply(
   local ok, message = xpcall(function()
     vim.api.nvim_buf_set_lines(buffer, 0, -1, false, output.lines)
     if output.rows then
-      diff_highlights.apply_diff(
-        buffer,
-        output,
-        inspections or {},
-        namespace
-      )
+      diff_highlights.apply_structure(buffer, output, namespace)
     else
       add_view_highlights(buffer, namespace, output)
     end
@@ -190,6 +184,15 @@ local function syntax_state(session)
   return state
 end
 
+local function syntax_cache(session)
+  local cache = syntax_caches[session]
+  if not cache then
+    cache = SyntaxCache.new(config.get().ui.syntax_cache_entries)
+    syntax_caches[session] = cache
+  end
+  return cache
+end
+
 local function changes_by_id(session)
   local changes = {}
   for _, section in ipairs({ "staged", "unstaged" }) do
@@ -202,10 +205,20 @@ local function changes_by_id(session)
   return changes
 end
 
-local function visible_changes(session, rendered)
+local function visible_changes(session, rendered, ids)
   local by_id = changes_by_id(session)
   local result = {}
   local seen = {}
+  if ids then
+    for _, change_id in ipairs(ids) do
+      local change = by_id[change_id]
+      if change and not seen[change_id] then
+        seen[change_id] = true
+        result[#result + 1] = change
+      end
+    end
+    return result
+  end
   for _, row in ipairs(rendered.rows or {}) do
     if row.change_id
         and not seen[row.change_id]
@@ -223,19 +236,20 @@ local function visible_changes(session, rendered)
   return result
 end
 
-local function visible_inspections(state, rendered)
+local function visible_inspections(state)
   local result = {}
-  for _, row in ipairs(rendered.rows or {}) do
-    local file = row.change_id and state.files[row.change_id] or nil
+  for _, change_id in ipairs(state.visible_ids or {}) do
+    local file = state.files[change_id]
     if file and file.complete then
-      result[row.change_id] = file.inspections
+      result[change_id] = file.inspections
     end
   end
   return result
 end
 
 local function state_is_current(session, state)
-  return syntax_states[session] == state
+  return state ~= nil
+    and syntax_states[session] == state
     and not session.closed
     and session.reads.generation == state.generation
 end
@@ -246,16 +260,22 @@ local function apply_current_inspections(session, state)
       or not valid_buffer(session.owned.diff_buf) then
     return
   end
-  diff_highlights.apply_diff(
+  local owned = state.namespaces
+  if not owned then return end
+  local inspections = visible_inspections(state)
+  diff_highlights.apply_syntax(
     session.owned.diff_buf,
     state.rendered,
-    visible_inspections(state, state.rendered),
-    state.namespace
+    inspections,
+    owned.diff_syntax
   )
-  local owned = namespaces[session]
-  if owned then
-    M.apply_syntax_statuses(session, state, owned.diff_status)
-  end
+  diff_highlights.apply_symbols(
+    session.owned.diff_buf,
+    state.rendered,
+    inspections,
+    owned.diff_symbols
+  )
+  M.apply_syntax_statuses(session, state, owned.diff_status)
 end
 
 local function inspection_path(change, side)
@@ -265,10 +285,18 @@ local function inspection_path(change, side)
   return change.path
 end
 
-local function inspect_snapshot(change, side, result)
+local function inspect_snapshot(session, change, side, result)
   if not result.ok then
     return result
   end
+  local key = table.concat({
+    inspection_path(change, side),
+    side,
+    vim.fn.sha256(result.value),
+  }, "\0")
+  local cache = syntax_cache(session)
+  local cached = cache:get(key)
+  if cached then return { ok = true, value = cached } end
   local ok, inspected = pcall(syntax_dependencies.inspect, {
     path = inspection_path(change, side),
     source = result.value,
@@ -285,6 +313,7 @@ local function inspect_snapshot(change, side, result)
       },
     }
   end
+  if inspected and inspected.ok then cache:put(key, inspected.value) end
   return inspected
 end
 
@@ -305,7 +334,7 @@ local function start_snapshot_side(session, state, change, file, side)
         return
       end
 
-      local inspected = inspect_snapshot(change, side, result)
+      local inspected = inspect_snapshot(session, change, side, result)
       if inspected and inspected.ok then
         file.inspections[side] = inspected.value
       elseif inspected and inspected.error then
@@ -323,17 +352,40 @@ local function start_snapshot_side(session, state, change, file, side)
   end
 end
 
-local function schedule_inspection(session, state, rendered, namespace)
+local function same_ids(left, right)
+  if #(left or {}) ~= #(right or {}) then return false end
+  for index, value in ipairs(left or {}) do
+    if right[index] ~= value then return false end
+  end
+  return true
+end
+
+local function schedule_inspection(
+    session,
+    state,
+    rendered,
+    owned_namespaces,
+    force
+)
   state.token = state.token + 1
   local token = state.token
   state.rendered = rendered
-  state.namespace = namespace
+  state.namespaces = owned_namespaces
 
   vim.schedule(function()
     if not state_is_current(session, state) or state.token ~= token then
       return
     end
-    for _, change in ipairs(visible_changes(session, rendered)) do
+    local first_row, last_row = viewport.range(
+      session.owned.diff_win,
+      config.get().ui.syntax_margin_screens
+    )
+    local visible_ids = first_row
+        and viewport.change_ids(rendered, first_row, last_row)
+      or {}
+    if not force and same_ids(state.visible_ids, visible_ids) then return end
+    state.visible_ids = visible_ids
+    for _, change in ipairs(visible_changes(session, rendered, visible_ids)) do
       if not state.files[change.id] then
         local file = {
           pending = 2,
@@ -346,6 +398,7 @@ local function schedule_inspection(session, state, rendered, namespace)
         start_snapshot_side(session, state, change, file, "new")
       end
     end
+    apply_current_inspections(session, state)
   end)
 end
 
@@ -381,7 +434,11 @@ function M.apply_syntax_statuses(session, state, namespace)
     return
   end
 
-  for _, change in ipairs(visible_changes(session, state.rendered)) do
+  for _, change in ipairs(visible_changes(
+      session,
+      state.rendered,
+      state.visible_ids or {}
+  )) do
     local text, group = syntax_status(state.files[change.id])
     local row = status_row(state.rendered, change.id)
     if text and row then
@@ -422,7 +479,7 @@ function M.render(session)
   local owned_namespaces = session_namespaces(session)
   local state = syntax_state(session)
   state.rendered = diff
-  state.namespace = owned_namespaces.diff
+  state.namespaces = owned_namespaces
   apply(
     session.owned.changes_buf,
     owned_namespaces.changes,
@@ -431,22 +488,29 @@ function M.render(session)
   )
   apply(
     session.owned.diff_buf,
-    owned_namespaces.diff,
+    owned_namespaces.diff_structure,
     owned_namespaces.diff_targets,
-    diff,
-    visible_inspections(state, diff)
+    diff
   )
-  M.apply_syntax_statuses(
-    session,
-    state,
-    owned_namespaces.diff_status
-  )
+  apply_current_inspections(session, state)
   apply_comment_markers(session, diff, owned_namespaces.comments)
   if session.owned.diff_win
       and vim.api.nvim_win_is_valid(session.owned.diff_win) then
     vim.wo[session.owned.diff_win].signcolumn = "yes:1"
   end
-  schedule_inspection(session, state, diff, owned_namespaces.diff)
+  schedule_inspection(session, state, diff, owned_namespaces, true)
+end
+
+function M.viewport_changed(session)
+  local state = syntax_states[session]
+  local owned = namespaces[session]
+  if not state_is_current(session, state)
+      or not state.rendered
+      or not owned
+      or not valid_buffer(session.owned.diff_buf) then
+    return
+  end
+  schedule_inspection(session, state, state.rendered, owned, false)
 end
 
 function M.target_at(buffer, row)
@@ -477,6 +541,7 @@ end
 function M.clear(session)
   cancel_syntax_jobs(session)
   syntax_states[session] = nil
+  syntax_caches[session] = nil
   if session.owned.diff_buf then
     targets[session.owned.diff_buf] = nil
     comment_rows[session.owned.diff_buf] = nil

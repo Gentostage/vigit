@@ -25,6 +25,20 @@ it("keeps action ids and active context mappings unique", function()
   end
 end)
 
+it("registers single and double mouse actions only for Vigit panes", function()
+  local mouse = {}
+  for _, entry in ipairs(keymaps.entries()) do
+    if entry.lhs == "<LeftMouse>" or entry.lhs == "<2-LeftMouse>" then
+      mouse[entry.lhs] = entry
+    end
+  end
+
+  assert_equal(mouse["<LeftMouse>"].intent, "mouse_select")
+  assert_equal(mouse["<2-LeftMouse>"].intent, "mouse_activate")
+  assert_equal(table.concat(mouse["<LeftMouse>"].contexts, ","), "diff,changes")
+  assert_equal(mouse["<LeftMouse>"].hint, false)
+end)
+
 it("omits disabled mappings from a context", function()
   local entries = keymaps.for_context("diff", {
     keymaps = { ["change.restore"] = false },

@@ -219,6 +219,102 @@ it("загружает diff для всех видимых изменений", 
   assert_equal(fake.diff_calls[2].change, second)
 end)
 
+it("ограничивает all-files batch и публикует три UI-фазы", function()
+  local fake = fake_git()
+  local phases = {}
+  local items, ids = {}, {}
+  for index = 1, 65 do
+    local item = {
+      id = "unstaged\0src/file-" .. index .. ".mjs",
+      section = "unstaged",
+      status = "M",
+      path = "src/file-" .. index .. ".mjs",
+    }
+    items[index], ids[index] = item, item.id
+  end
+  local changes = Changes.new({
+    git = fake,
+    on_change = function(_, event)
+      if event and event.phase then
+        phases[#phases + 1] = event.phase
+      end
+    end,
+  })
+  local session = Session.new({ id = "batch", root = "/repo" })
+  session.data.status = { branch = {}, staged = {}, unstaged = items }
+
+  changes:load_all_visible(session, ids)
+
+  assert_equal(#fake.diff_callbacks, 8)
+  local first_wave = {}
+  for index = 1, 8 do first_wave[index] = fake.diff_callbacks[index] end
+  for index = 1, 8 do
+    first_wave[index](Result.ok({ hunks = {}, headers = {}, patch = "" }))
+  end
+  assert_equal(phases, { "loading", "preview" })
+  assert_equal(#fake.diff_callbacks, 16)
+  for index = 9, 65 do
+    fake.diff_callbacks[index](Result.ok({ hunks = {}, headers = {}, patch = "" }))
+  end
+  assert_equal(phases, { "loading", "preview", "complete" })
+end)
+
+it("не публикует complete и не меняет diff после отмены batch generation", function()
+  local fake = fake_git()
+  local phases = {}
+  local selected = change("unstaged\0src/a.lua")
+  local changes = Changes.new({
+    git = fake,
+    on_change = function(_, event)
+      if event and event.phase then
+        phases[#phases + 1] = event.phase
+      end
+    end,
+  })
+  local session = Session.new({ id = "stale-batch", root = "/repo" })
+  session.data.status = status(selected)
+
+  changes:load_all_visible(session, { selected.id })
+  session.reads.generation = session.reads.generation + 1
+  fake.diff_callbacks[1](Result.ok({ id = selected.id, version = "stale" }))
+
+  assert_equal(session.data.diffs[selected.id], nil)
+  assert_equal(phases, { "loading" })
+end)
+
+it("объединяет pending content render и немедленно flush-ит последний", function()
+  local loaded, RenderQueue = pcall(require, "vigit.ui.render_queue")
+  assert_truthy(loaded)
+  local scheduled = {}
+  local renders = 0
+  local queue = RenderQueue.new({
+    delay_ms = 16,
+    render = function()
+      renders = renders + 1
+    end,
+    schedule = function(_, callback)
+      local handle = { cancelled = false }
+      function handle.cancel() handle.cancelled = true end
+      scheduled[#scheduled + 1] = { callback = callback, handle = handle }
+      return handle
+    end,
+  })
+  local session = Session.new({ id = "render-queue", root = "/repo" })
+
+  queue:request(session)
+  queue:request(session)
+  assert_equal(#scheduled, 1)
+  scheduled[1].callback()
+  assert_equal(renders, 1)
+
+  queue:request(session)
+  queue:flush(session)
+  assert_equal(renders, 2)
+  assert_equal(scheduled[2].handle.cancelled, true)
+  scheduled[2].callback()
+  assert_equal(renders, 2)
+end)
+
 it("сбрасывает pending diff после неуспешного обновления статуса", function()
   local fake = fake_git()
   local changes = Changes.new({ git = fake })

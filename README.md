@@ -145,6 +145,8 @@ Other terminal buffers are never affected.
 | --- | --- |
 | `<Tab>` | Switch focus between diff and changes |
 | `<CR>` | Open the selected change |
+| Single click | Select a file or expand/collapse a directory |
+| Double click | Select a file and focus its diff |
 | `]f` / `[f` | Next/previous file |
 | `]h` / `[h` | Next/previous hunk |
 | `a` | Toggle one-file/all-files diff |
@@ -153,7 +155,7 @@ Other terminal buffers are never affected.
 | `e` | Open the source file |
 | `gd` | Go to the LSP definition |
 | `T` | Open or focus the Vigit terminal in the worktree |
-| `s` | Stage/unstage the current file |
+| `s` | Stage/unstage the current file or directory |
 | `S` | Stage/unstage the current hunk |
 | `x` | Restore an unstaged hunk after `y/N` |
 | `X` | Restore a file to `HEAD` after `y/N` |
@@ -166,6 +168,24 @@ Other terminal buffers are never affected.
 | `q` | Hide Vigit and return to code mode |
 
 The generated complete reference lives in [docs/keymaps.md](docs/keymaps.md).
+
+## Large reviews
+
+All-files mode loads diffs with bounded concurrency and coalesces intermediate
+renders. Tree-sitter syntax inspection follows the visible viewport plus one
+screen of margin, and parsed snapshots are retained in an LRU cache. The
+defaults are intended for large AI-generated change sets; they can be tuned:
+
+```lua
+require("vigit").setup({
+  ui = {
+    diff_concurrency = 8,
+    render_delay_ms = 16,
+    syntax_margin_screens = 1,
+    syntax_cache_entries = 64,
+  },
+})
+```
 
 ## Comments and agent handoff
 

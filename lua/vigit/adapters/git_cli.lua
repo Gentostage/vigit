@@ -755,12 +755,32 @@ local function mutation_paths(change, include_old_path)
   return paths
 end
 
-local function verified_mutation_status(result, section, path)
-  if not result.ok then
-    return result
+local function mutation_batch_paths(changes)
+  if type(changes) ~= "table" or #changes == 0 then
+    return nil, "changes are missing"
   end
+  local paths = {}
+  local seen = {}
+  for _, change in ipairs(changes) do
+    local change_paths, validation_error = mutation_paths(change, true)
+    if not change_paths then return nil, validation_error end
+    for _, path in ipairs(change_paths) do
+      if not seen[path] then
+        seen[path] = true
+        paths[#paths + 1] = path
+      end
+    end
+  end
+  table.sort(paths)
+  return paths
+end
+
+local function verified_mutation_statuses(result, section, changes)
+  if not result.ok then return result end
+  local paths = {}
+  for _, change in ipairs(changes) do paths[change.path] = true end
   for _, change in ipairs(result.value[section] or {}) do
-    if change.path == path then
+    if paths[change.path] then
       return Result.err("stale_change", "File change is missing or stale")
     end
   end
@@ -768,7 +788,11 @@ local function verified_mutation_status(result, section, path)
 end
 
 function Git:stage_file(root, change, callback)
-  local paths, validation_error = mutation_paths(change, true)
+  return self:stage_files(root, { change }, callback)
+end
+
+function Git:stage_files(root, changes, callback)
+  local paths, validation_error = mutation_batch_paths(changes)
   if not paths then
     return stale_change(callback, validation_error)
   end
@@ -793,7 +817,11 @@ function Git:stage_file(root, change, callback)
     end
     status_handle = self:status(root, function(status_result)
       if not cancelled then
-        callback(verified_mutation_status(status_result, "unstaged", change.path))
+        callback(verified_mutation_statuses(
+          status_result,
+          "unstaged",
+          changes
+        ))
       end
     end)
   end)
@@ -812,7 +840,11 @@ function Git:stage_file(root, change, callback)
 end
 
 function Git:unstage_file(root, change, callback)
-  local paths, validation_error = mutation_paths(change, true)
+  return self:unstage_files(root, { change }, callback)
+end
+
+function Git:unstage_files(root, changes, callback)
+  local paths, validation_error = mutation_batch_paths(changes)
   if not paths then
     return stale_change(callback, validation_error)
   end
@@ -876,7 +908,11 @@ function Git:unstage_file(root, change, callback)
         end
         status_handle = self:status(root, function(status_result)
           if not cancelled then
-            callback(verified_mutation_status(status_result, "staged", change.path))
+            callback(verified_mutation_statuses(
+              status_result,
+              "staged",
+              changes
+            ))
           end
         end)
       end)

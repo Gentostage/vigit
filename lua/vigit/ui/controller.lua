@@ -1,4 +1,5 @@
 local anchor = require("vigit.core.anchor")
+local change_scope = require("vigit.core.change_scope")
 local config = require("vigit.config")
 local Result = require("vigit.core.result")
 local Mutations = require("vigit.application.mutations")
@@ -29,6 +30,7 @@ local supported_intents = {
   activate = true, select_change = true, next_file = true,
   previous_file = true, next_hunk = true, previous_hunk = true,
   toggle_all_files = true, toggle_changes_mode = true, toggle_file_index = true,
+  mouse_select = true, mouse_activate = true,
   toggle_hunk_index = true, restore_hunk = true, restore_file = true,
   add_comment = true, open_comments = true, prepare_prompt = true,
   open_file = true, goto_definition = true, open_terminal = true,
@@ -418,12 +420,107 @@ local function refresh_file_mutation(
   end)
 end
 
+local function change_identity(change)
+  if not change then
+    return nil
+  end
+  return table.concat({
+    change.id or "",
+    change.section or "",
+    change.status or "",
+    change.path or "",
+    change.old_path or "",
+    change.unmerged and "1" or "0",
+  }, "\0")
+end
+
 local function toggle_file_index(session)
   if session.busy.mutation then
     return
   end
 
-  local change = active_change(session)
+  local target = active_target(session)
+  if target and target.kind == "directory" then
+    local scope = change_scope.under_directory(
+      session.data.status,
+      target.section,
+      target.path
+    )
+    if #scope == 0 then
+      mutation_error(session, Result.err(
+        "stale_change",
+        "Directory change scope is missing or stale"
+      ).error)
+      return
+    end
+
+    local method = target.section == "staged" and "unstage_files" or "stage_files"
+    if type(context.changes.git[method]) ~= "function" then
+      mutation_error(session, Result.err(
+        "mutation_unavailable",
+        "Directory index mutation is unavailable"
+      ).error)
+      return
+    end
+
+    local selected = change_for(session, session.view.selected_change_id)
+    local selected_in_scope = false
+    for _, item in ipairs(scope) do
+      if selected and item.id == selected.id then
+        selected_in_scope = true
+        break
+      end
+    end
+    selected = selected or scope[1]
+    local destination_section = selected_in_scope
+        and (target.section == "staged" and "unstaged" or "staged")
+      or selected.section
+    local source_anchor = file_anchor(session, selected)
+    local target_position = file_target_position(session, selected.id)
+    local focus_window = owned_focus(session)
+    local identities = {}
+    for index, item in ipairs(scope) do
+      identities[index] = change_identity(item)
+    end
+
+    session.mutations = session.mutations or {}
+    session.mutations.toggle_serial = (session.mutations.toggle_serial or 0) + 1
+    context.mutations:enqueue(session, {
+      id = "toggle_file_index:" .. session.mutations.toggle_serial,
+      run = function(done)
+        local latest = change_scope.under_directory(
+          session.data.status,
+          target.section,
+          target.path
+        )
+        if #latest ~= #scope then
+          done(Result.err("stale_change", "Directory change scope is missing or stale"))
+          return
+        end
+        for index, item in ipairs(latest) do
+          if change_identity(item) ~= identities[index] then
+            done(Result.err("stale_change", "Directory change scope is missing or stale"))
+            return
+          end
+        end
+        context.changes.git[method](context.changes.git, session.root, latest, done)
+      end,
+      after_success = function()
+        refresh_file_mutation(
+          session,
+          selected.path,
+          destination_section,
+          source_anchor,
+          target_position,
+          focus_window,
+          false
+        )
+      end,
+    })
+    return
+  end
+
+  local change = target and change_for(session, target.change_id)
   if not change or (change.section ~= "staged" and change.section ~= "unstaged") then
     mutation_error(session, Result.err(
       "stale_change",
@@ -484,20 +581,6 @@ local function hunk_for(change, file_diff, hunk_id)
       end
     end
   end
-end
-
-local function change_identity(change)
-  if not change then
-    return nil
-  end
-  return table.concat({
-    change.id or "",
-    change.section or "",
-    change.status or "",
-    change.path or "",
-    change.old_path or "",
-    change.unmerged and "1" or "0",
-  }, "\0")
 end
 
 local function toggle_hunk_index(session)
@@ -985,6 +1068,60 @@ local function activate(session, intent)
   end
 end
 
+local function mouse_target(session, intent)
+  if type(intent) ~= "table" then
+    return nil
+  end
+  local window = tonumber(intent.winid) or intent.winid
+  if window ~= session.owned.changes_win and window ~= session.owned.diff_win then
+    return nil
+  end
+  if not vim.api.nvim_win_is_valid(window) then
+    return nil
+  end
+  local expected_buffer = window == session.owned.changes_win
+      and session.owned.changes_buf
+    or session.owned.diff_buf
+  if vim.api.nvim_win_get_buf(window) ~= expected_buffer then
+    return nil
+  end
+  local line = tonumber(intent.line)
+  if not line or line < 1 or line % 1 ~= 0 then
+    return nil
+  end
+  vim.api.nvim_set_current_win(window)
+  pcall(vim.api.nvim_win_set_cursor, window, {
+    line,
+    math.max(0, (tonumber(intent.column) or 1) - 1),
+  })
+  return renderer.target_at(expected_buffer, line), window
+end
+
+local function mouse_select(session, intent, activate_file)
+  local target, window = mouse_target(session, intent)
+  if not target or window ~= session.owned.changes_win then
+    return
+  end
+  if target.kind == "directory" then
+    if not activate_file then
+      session.view.expanded_dirs = session.view.expanded_dirs or {}
+      local key = target.key
+        or string.format("%s\0%s", target.section or "", target.path)
+      session.view.expanded_dirs[key] = target.expanded == false
+      renderer.render(session)
+    end
+    return
+  end
+  if target.kind ~= "change" then
+    return
+  end
+  select_change(session, target)
+  if activate_file and session.owned.diff_win
+      and vim.api.nvim_win_is_valid(session.owned.diff_win) then
+    vim.api.nvim_set_current_win(session.owned.diff_win)
+  end
+end
+
 local function move_file(session, delta)
   local targets = renderer.file_targets(session)
   if #targets == 0 then
@@ -1064,6 +1201,10 @@ function M.dispatch(session, intent)
     activate(session, intent)
   elseif name == "select_change" then
     select_change(session, intent)
+  elseif name == "mouse_select" then
+    mouse_select(session, intent, false)
+  elseif name == "mouse_activate" then
+    mouse_select(session, intent, true)
   elseif name == "next_file" then
     move_file(session, 1)
   elseif name == "previous_file" then

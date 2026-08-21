@@ -51,6 +51,7 @@ function M.new(opts)
       source_buffers = {},
       last_source_buffer = nil,
       terminal = nil,
+      autocmds = {},
     },
     busy = {},
     errors = {

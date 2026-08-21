@@ -1,4 +1,28 @@
 local status = require("vigit.core.status")
+local change_scope = require("vigit.core.change_scope")
+
+it("выбирает изменения только внутри точной папки и секции", function()
+  local selected = change_scope.under_directory({
+    staged = {
+      { section = "staged", path = "src/api/staged.lua" },
+    },
+    unstaged = {
+      { section = "unstaged", path = "src/api/a.lua" },
+      {
+        section = "unstaged",
+        status = "R",
+        old_path = "src/api/old.lua",
+        path = "src/api/new.lua",
+      },
+      { section = "unstaged", path = "src/api_v2/b.lua" },
+      { section = "unstaged", path = "src/other.lua" },
+    },
+  }, "unstaged", "src/api")
+
+  assert_equal(#selected, 2)
+  assert_equal(selected[1].path, "src/api/a.lua")
+  assert_equal(selected[2].path, "src/api/new.lua")
+end)
 
 it("parses branch metadata and NUL-delimited ordinary changes", function()
   local raw = table.concat({

@@ -106,7 +106,6 @@ it("preserves a real line-90 byte anchor through f and native e handoff", functi
     )
 
     controller.dispatch(session, "f")
-    assert_truthy(contains_line(session.owned.diff_buf, "Loading diff…"))
     assert_truthy(contains_line(
       session.owned.diff_buf,
       "target_value = \"new\""
@@ -162,10 +161,6 @@ it("preserves a real line-90 byte anchor through f and native e handoff", functi
     assert_truthy(contains_line(
       session.owned.diff_buf,
       "target_value = \"new\""
-    ))
-    assert_truthy(contains_line(
-      session.owned.diff_buf,
-      "Refreshing changes…"
     ))
     assert_truthy(vim.wait(3000, function()
       return session.reads.generation > previous_generation

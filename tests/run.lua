@@ -22,6 +22,7 @@ local default_files = {
   "tests/unit/keymaps_spec.lua",
   "tests/unit/log_spec.lua",
   "tests/unit/skill_spec.lua",
+  "tests/unit/syntax_cache_spec.lua",
 }
 
 local using_default_files = #arg == 0
@@ -42,8 +43,8 @@ end
 assert(test_count > 0, "test runner loaded zero tests")
 if using_default_files then
   assert(
-    test_count == 190,
-    string.format("expected 190 default tests, loaded %d", test_count)
+    test_count == 196,
+    string.format("expected 196 default tests, loaded %d", test_count)
   )
 end
 

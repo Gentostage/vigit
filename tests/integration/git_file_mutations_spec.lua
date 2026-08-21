@@ -91,6 +91,88 @@ it("stages and unstages a tracked modification without changing bytes", function
   end)
 end)
 
+it("stages and unstages an exact directory batch without touching siblings", function(done)
+  local repo = git_repo.new()
+  for path, bytes in pairs({
+    ["src/api/modified.txt"] = "base modified\n",
+    ["src/api/deleted.txt"] = "base deleted\n",
+    ["src/api/old.txt"] = "base renamed\n",
+    ["src/other.txt"] = "base sibling\n",
+  }) do
+    repo:write(path, bytes)
+  end
+  repo:git({ "add", "--", "src" })
+  repo:commit("base")
+  repo:write("src/api/modified.txt", "changed modified\n")
+  repo:write("src/api/new.txt", "untracked\n")
+  repo:write("src/other.txt", "changed sibling\n")
+  assert_equal(vim.fn.delete(repo.root .. "/src/api/deleted.txt"), 0)
+  assert_equal(vim.uv.fs_rename(
+    repo.root .. "/src/api/old.txt",
+    repo.root .. "/src/api/renamed.txt"
+  ), true)
+  local git = git_cli.new(process)
+
+  status(git, repo.root, function(current)
+    local targets = {}
+    for _, change in ipairs(current.unstaged) do
+      if change.path:sub(1, 8) == "src/api/" then
+        targets[#targets + 1] = change
+      end
+    end
+    git:stage_files(repo.root, targets, function(stage_result)
+      assert_truthy(stage_result.ok)
+      status(git, repo.root, function(after_stage)
+        assert_equal(find_change(after_stage.staged, "src/other.txt"), nil)
+        assert_truthy(find_change(after_stage.unstaged, "src/other.txt"))
+        local staged_targets = {}
+        for _, change in ipairs(after_stage.staged) do
+          if change.path:sub(1, 8) == "src/api/" then
+            staged_targets[#staged_targets + 1] = change
+          end
+        end
+        assert_truthy(#staged_targets >= 3)
+        git:unstage_files(repo.root, staged_targets, function(unstage_result)
+          assert_truthy(unstage_result.ok)
+          status(git, repo.root, function(after_unstage)
+            for _, change in ipairs(after_unstage.staged) do
+              assert_truthy(change.path:sub(1, 8) ~= "src/api/")
+            end
+            assert_truthy(find_change(after_unstage.unstaged, "src/other.txt"))
+            repo:cleanup()
+            done()
+          end)
+        end)
+      end)
+    end)
+  end)
+end)
+
+it("rejects an invalid batch before changing index or worktree", function(done)
+  local repo = git_repo.new()
+  repo:write("tracked.txt", "base\n")
+  repo:git({ "add", "--", "tracked.txt" })
+  repo:commit("base")
+  repo:write("tracked.txt", "changed\n")
+  local git = git_cli.new(process)
+  local before = snapshot(repo.root, "tracked.txt")
+
+  git:stage_files(repo.root, {
+    { section = "unstaged", status = "M", path = "tracked.txt" },
+    { section = "unstaged", status = "M", path = "../escape.txt" },
+  }, function(result)
+    assert_equal(result.ok, false)
+    assert_equal(result.error.code, "stale_change")
+    local after = snapshot(repo.root, "tracked.txt")
+    assert_equal(after.status, before.status)
+    assert_equal(after.diff, before.diff)
+    assert_equal(after.cached_diff, before.cached_diff)
+    assert_equal(after.bytes, before.bytes)
+    repo:cleanup()
+    done()
+  end)
+end)
+
 it("stages and unstages a deletion without restoring the file", function(done)
   local repo = git_repo.new()
   repo:write("deleted.txt", "base\n")

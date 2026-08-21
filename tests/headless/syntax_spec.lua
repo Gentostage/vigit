@@ -74,7 +74,7 @@ end
 local function close_session(session)
   if session and not session.closed then
     renderer.clear(session)
-    layout.close(session)
+    layout.dispose(session)
   end
 end
 
@@ -556,6 +556,57 @@ it("maps old/new captures onto marker-free rows with layered priorities", functi
   end
 end)
 
+it("проходит captures sweep-ом и сохраняет multiline intersections", function()
+  local namespace = vim.api.nvim_create_namespace("vigit-test-capture-sweep")
+  local buffer = vim.api.nvim_create_buf(false, true)
+  local change_id = "unstaged\0large.py"
+  local rendered = { lines = {}, rows = {} }
+  for row = 1, 20 do
+    rendered.lines[row] = "value_" .. row
+    rendered.rows[row] = {
+      text = rendered.lines[row],
+      kind = "context",
+      change_id = change_id,
+      source_anchor = { side = "new", source_line = row },
+    }
+  end
+  local reads = 0
+  local captures = {
+    {
+      group = "@keyword",
+      start_row = 0,
+      start_col = 0,
+      end_row = 1,
+      end_col = 4,
+    },
+  }
+  for index = 1, 1000 do
+    local values = {
+      group = "@keyword",
+      start_row = 1000 + index,
+      start_col = 0,
+      end_row = 1000 + index,
+      end_col = 4,
+    }
+    captures[#captures + 1] = setmetatable({}, {
+      __index = function(_, key)
+        reads = reads + 1
+        return values[key]
+      end,
+    })
+  end
+
+  vim.api.nvim_buf_set_lines(buffer, 0, -1, false, rendered.lines)
+  highlights.apply_syntax(buffer, rendered, {
+    [change_id] = { new = manual_inspection(captures) },
+  }, namespace)
+
+  assert_truthy(has_group(buffer, namespace, 1, "@keyword"))
+  assert_truthy(has_group(buffer, namespace, 2, "@keyword"))
+  assert_truthy(reads < 5000)
+  vim.api.nvim_buf_delete(buffer, { force = true })
+end)
+
 it("labels only hidden declarations and discards stale scheduled inspection", function()
   local namespace = vim.api.nvim_create_namespace("vigit-test-symbol-context")
   local buffer = vim.api.nvim_create_buf(false, true)
@@ -679,9 +730,11 @@ it("labels only hidden declarations and discards stale scheduled inspection", fu
       end,
     }
   end
+  local inspect_calls = 0
   renderer.configure({
     git = fake_git,
     inspect = function(opts)
+      inspect_calls = inspect_calls + 1
       return Result.ok(manual_inspection({
         {
           group = "@keyword.function.python",
@@ -816,6 +869,19 @@ it("labels only hidden declarations and discards stale scheduled inspection", fu
     renderer.render(session)
     assert_truthy(vim.wait(1000, function()
       return #pending == 2
+    end, 10))
+    for _, request in ipairs(pending) do
+      request.callback(Result.ok(request.side == "old"
+        and "def old():"
+        or "def new():"))
+    end
+    assert_equal(inspect_calls, 2)
+
+    session.reads.generation = 4
+    pending = {}
+    renderer.render(session)
+    assert_truthy(vim.wait(1000, function()
+      return #pending == 2
         and has_virtual_text(
           session.owned.diff_buf,
           "syntax: loading"
@@ -852,4 +918,106 @@ it("labels only hidden declarations and discards stale scheduled inspection", fu
   if not ok then
     error(message, 0)
   end
+end)
+
+it("инспектирует syntax только для viewport без перезаписи diff buffer", function()
+  local pending = {}
+  local fake_git = {}
+  function fake_git:snapshot(_, change, side, callback)
+    pending[#pending + 1] = {
+      change_id = change.id,
+      side = side,
+      callback = callback,
+    }
+    return { cancel = function() end }
+  end
+  renderer.configure({
+    git = fake_git,
+    inspect = function()
+      return Result.ok(manual_inspection())
+    end,
+  })
+
+  local session = Session.new({ id = "syntax-viewport", root = "/repo" })
+  local changes = {}
+  session.data.status = { branch = {}, staged = {}, unstaged = changes }
+  session.view.diff_mode = "all_files"
+  for index = 1, 3 do
+    local id = "unstaged\0file-" .. index .. ".py"
+    local change = {
+      id = id,
+      section = "unstaged",
+      status = "M",
+      path = "file-" .. index .. ".py",
+    }
+    changes[index] = change
+    local lines = {}
+    for line = 1, 40 do
+      lines[line] = { kind = "add", text = "value_" .. line, new_line = line }
+    end
+    session.data.diffs[id] = {
+      id = id,
+      path = change.path,
+      section = change.section,
+      status = change.status,
+      headers = {},
+      hunks = {
+        {
+          id = id .. "\0hunk",
+          header = "@@ -0,0 +1,40 @@",
+          old_start = 0,
+          old_count = 0,
+          new_start = 1,
+          new_count = 40,
+          lines = lines,
+        },
+      },
+    }
+  end
+
+  local ok, message = xpcall(function()
+    layout.open(session)
+    local window_config = vim.api.nvim_win_get_config(session.owned.diff_win)
+    window_config.height = 6
+    vim.api.nvim_win_set_config(session.owned.diff_win, window_config)
+    renderer.render(session)
+    assert_truthy(vim.wait(1000, function() return #pending >= 2 end, 10))
+    assert_equal(#pending, 2)
+    assert_equal(pending[1].change_id, changes[1].id)
+    assert_equal(pending[2].change_id, changes[1].id)
+
+    for index = 1, 2 do
+      pending[index].callback(Result.ok("value = 1"))
+    end
+
+    local third_row = assert(find_row(session.owned.diff_buf, "file-3.py"))
+    vim.api.nvim_win_set_cursor(session.owned.diff_win, { third_row, 0 })
+    vim.api.nvim_win_call(session.owned.diff_win, function() vim.cmd("normal! zt") end)
+    local set_lines_calls = 0
+    local original_set_lines = vim.api.nvim_buf_set_lines
+    local viewport_ok, viewport_message = xpcall(function()
+      vim.api.nvim_buf_set_lines = function(target, ...)
+        if target == session.owned.diff_buf then
+          set_lines_calls = set_lines_calls + 1
+        end
+        return original_set_lines(target, ...)
+      end
+      renderer.viewport_changed(session)
+      assert_truthy(vim.wait(1000, function() return #pending >= 6 end, 10))
+      assert_equal(pending[3].change_id, changes[2].id)
+      assert_equal(pending[4].change_id, changes[2].id)
+      assert_equal(pending[5].change_id, changes[3].id)
+      assert_equal(pending[6].change_id, changes[3].id)
+      for index = 3, 6 do
+        pending[index].callback(Result.ok("value = 3"))
+      end
+    end, debug.traceback)
+    vim.api.nvim_buf_set_lines = original_set_lines
+    if not viewport_ok then error(viewport_message, 0) end
+    assert_equal(set_lines_calls, 0)
+  end, debug.traceback)
+
+  renderer.configure()
+  close_session(session)
+  if not ok then error(message, 0) end
 end)

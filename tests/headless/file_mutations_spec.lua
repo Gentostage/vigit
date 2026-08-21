@@ -40,6 +40,7 @@ local function with_controller(body)
     win_get_cursor = vim.api.nvim_win_get_cursor,
     win_set_cursor = vim.api.nvim_win_set_cursor,
     win_get_width = vim.api.nvim_win_get_width,
+    win_get_buf = vim.api.nvim_win_get_buf,
     buf_is_valid = vim.api.nvim_buf_is_valid,
   }
   local targets = {}
@@ -127,6 +128,15 @@ local function with_controller(body)
   vim.api.nvim_win_get_width = function()
     return 80
   end
+  vim.api.nvim_win_get_buf = function(window)
+    for _, session in ipairs({}) do
+      if window == session.owned.changes_win then return session.owned.changes_buf end
+      if window == session.owned.diff_win then return session.owned.diff_buf end
+    end
+    if type(window) == "string" then
+      return window:gsub("%-win$", "-buf")
+    end
+  end
   vim.api.nvim_buf_is_valid = function(buffer)
     return buffer ~= nil
   end
@@ -154,6 +164,19 @@ local function with_controller(body)
     cursors[session.owned.diff_win] = { 1, 0 }
   end
 
+  local function set_directory_target(session, section, path, expanded)
+    targets[session.owned.changes_buf] = {
+      [1] = {
+        kind = "directory",
+        section = section,
+        path = path,
+        key = section .. "\0" .. path,
+        expanded = expanded ~= false,
+      },
+    }
+    cursors[session.owned.changes_win] = { 1, 0 }
+  end
+
   local function setup(fake_git)
     changes = {
       git = fake_git,
@@ -162,6 +185,9 @@ local function with_controller(body)
       end,
       load_diff = function(_, _, _, _, _, callback)
         callback(Result.ok({}))
+      end,
+      select = function(_, session, change_id)
+        session.view.selected_change_id = change_id
       end,
     }
     local controller = require("vigit.ui.controller")
@@ -176,6 +202,7 @@ local function with_controller(body)
     body({
       setup = setup,
       set_target = set_target,
+      set_directory_target = set_directory_target,
       set_current = function(session, view)
         current_win = view == "diff" and session.owned.diff_win or session.owned.changes_win
       end,
@@ -191,6 +218,9 @@ local function with_controller(body)
       cursor = function(session)
         return cursors[session.owned.diff_win]
       end,
+      changes_cursor = function(session)
+        return cursors[session.owned.changes_win]
+      end,
     })
   end, debug.traceback)
 
@@ -200,6 +230,7 @@ local function with_controller(body)
   vim.api.nvim_win_get_cursor = original_api.win_get_cursor
   vim.api.nvim_win_set_cursor = original_api.win_set_cursor
   vim.api.nvim_win_get_width = original_api.win_get_width
+  vim.api.nvim_win_get_buf = original_api.win_get_buf
   vim.api.nvim_buf_is_valid = original_api.buf_is_valid
   package.loaded["vigit.ui.controller"] = previous_controller
   package.loaded["vigit.ui.renderer"] = previous_renderer
@@ -241,6 +272,148 @@ it("toggle_file_index chooses stage and unstage and restores the closest anchor"
     controller.dispatch(session, "toggle_file_index")
     assert_equal(calls[2], "unstage:file.txt")
     assert_equal(session.view.selected_change_id, "unstaged\0file.txt")
+  end)
+end)
+
+it("mouse selects a file without leaving the tree and double click focuses diff", function()
+  with_controller(function(harness)
+    local item = change("unstaged", "src/file.lua")
+    local session = new_session("mouse-file", {}, { item })
+    local controller = harness.setup({})
+    harness.set_target(session, item)
+    harness.set_current(session, "diff")
+
+    controller.dispatch(session, {
+      name = "mouse_select",
+      winid = session.owned.changes_win,
+      line = 1,
+      column = 3,
+    })
+
+    assert_equal(session.view.selected_change_id, item.id)
+    assert_equal(harness.current(), session.owned.changes_win)
+    assert_equal(harness.changes_cursor(session)[1], 1)
+
+    controller.dispatch(session, {
+      name = "mouse_activate",
+      winid = session.owned.changes_win,
+      line = 1,
+      column = 3,
+    })
+
+    assert_equal(harness.current(), session.owned.diff_win)
+  end)
+end)
+
+it("single mouse click toggles a directory and ignores foreign windows", function()
+  with_controller(function(harness)
+    local item = change("unstaged", "src/api/file.lua")
+    local session = new_session("mouse-directory", {}, { item })
+    local controller = harness.setup({})
+    harness.set_directory_target(session, "unstaged", "src/api")
+    harness.set_current(session, "diff")
+
+    controller.dispatch(session, {
+      name = "mouse_select",
+      winid = "foreign-win",
+      line = 1,
+      column = 1,
+    })
+    assert_equal(session.view.expanded_dirs["unstaged\0src/api"], nil)
+
+    controller.dispatch(session, {
+      name = "mouse_select",
+      winid = session.owned.changes_win,
+      line = 1,
+      column = 1,
+    })
+
+    assert_equal(session.view.expanded_dirs["unstaged\0src/api"], false)
+    assert_equal(harness.current(), session.owned.changes_win)
+  end)
+end)
+
+it("toggle_file_index stages an exact directory scope in one mutation", function()
+  with_controller(function(harness)
+    local selected = change("unstaged", "src/api/first.lua")
+    local sibling = change("unstaged", "src/api_v2/sibling.lua")
+    local nested = change("unstaged", "src/api/nested/second.lua")
+    local session = new_session("folder-stage", {}, { selected, sibling, nested })
+    session.view.selected_change_id = selected.id
+    session.view.expanded_dirs["unstaged\0src/api"] = true
+    local calls = {}
+    local git = {
+      stage_files = function(_, _, items, done)
+        for _, item in ipairs(items) do calls[#calls + 1] = item.path end
+        session.data.status = status({
+          change("staged", selected.path),
+          change("staged", nested.path),
+        }, { sibling })
+        done(Result.ok(true))
+      end,
+    }
+    local controller = harness.setup(git)
+    harness.set_directory_target(session, "unstaged", "src/api")
+    harness.set_current(session, "changes")
+
+    controller.dispatch(session, "toggle_file_index")
+
+    assert_equal(table.concat(calls, ","),
+      "src/api/first.lua,src/api/nested/second.lua")
+    assert_equal(session.view.selected_change_id, "staged\0src/api/first.lua")
+    assert_equal(session.view.expanded_dirs["unstaged\0src/api"], true)
+    assert_equal(harness.current(), session.owned.changes_win)
+  end)
+end)
+
+it("toggle_file_index unstages an exact directory scope", function()
+  with_controller(function(harness)
+    local first = change("staged", "src/api/first.lua")
+    local second = change("staged", "src/api/nested/second.lua")
+    local session = new_session("folder-unstage", { first, second }, {})
+    session.view.selected_change_id = second.id
+    local calls = {}
+    local git = {
+      unstage_files = function(_, _, items, done)
+        for _, item in ipairs(items) do calls[#calls + 1] = item.path end
+        session.data.status = status({}, {
+          change("unstaged", first.path),
+          change("unstaged", second.path),
+        })
+        done(Result.ok(true))
+      end,
+    }
+    local controller = harness.setup(git)
+    harness.set_directory_target(session, "staged", "src/api")
+    harness.set_current(session, "changes")
+
+    controller.dispatch(session, "toggle_file_index")
+
+    assert_equal(table.concat(calls, ","),
+      "src/api/first.lua,src/api/nested/second.lua")
+    assert_equal(session.view.selected_change_id, "unstaged\0src/api/nested/second.lua")
+  end)
+end)
+
+it("toggle_file_index rejects a stale or empty directory scope", function()
+  with_controller(function(harness)
+    local session = new_session("folder-stale", {}, {
+      change("unstaged", "src/other.lua"),
+    })
+    local calls = 0
+    local git = {
+      stage_files = function()
+        calls = calls + 1
+      end,
+    }
+    local controller = harness.setup(git)
+    harness.set_directory_target(session, "unstaged", "src/api")
+    harness.set_current(session, "changes")
+
+    controller.dispatch(session, "toggle_file_index")
+
+    assert_equal(calls, 0)
+    assert_equal(session.error.code, "stale_change")
   end)
 end)
 

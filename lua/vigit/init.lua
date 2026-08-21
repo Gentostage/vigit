@@ -13,6 +13,7 @@ local keymaps = require("vigit.ui.keymaps")
 local layout = require("vigit.ui.layout")
 local registry_module = require("vigit.ui.registry")
 local renderer = require("vigit.ui.renderer")
+local RenderQueue = require("vigit.ui.render_queue")
 local Session = require("vigit.ui.session")
 local worktrees_view = require("vigit.ui.views.worktrees")
 local log = require("vigit.ui.log")
@@ -31,6 +32,10 @@ local workspace
 local reconciled_generation = setmetatable({}, { __mode = "k" })
 local pending_refreshes = setmetatable({}, { __mode = "k" })
 local refresh_timer
+local content_renders = RenderQueue.new({
+  render = renderer.render,
+  delay_ms = config.get().ui.render_delay_ms,
+})
 
 local function log_session_error(session)
   if not session or not session.error then
@@ -186,32 +191,43 @@ local function reconcile_all_files(session)
       or session.view.diff_mode ~= "all_files"
       or not session.data.status
       or session.busy.status
+      or session.view.all_files.batch
       or session.error
       or reconciled_generation[session] == session.reads.generation then
     return
   end
 
   local generation = session.reads.generation
+  local ids = all_missing_ids(session)
+  if #ids == 0 then
+    reconciled_generation[session] = generation
+    return
+  end
   reconciled_generation[session] = generation
   vim.schedule(function()
     if session.closed
         or session.reads.generation ~= generation
-        or session.view.diff_mode ~= "all_files" then
+        or session.view.diff_mode ~= "all_files"
+        or session.view.all_files.batch then
       return
     end
-    changes:load_all_visible(session, all_missing_ids(session))
+    changes:load_all_visible(session, ids)
   end)
 end
 
 changes = Changes.new({
   git = git,
-  on_change = function(session)
+  on_change = function(session, event)
     local status = session.data.status
     if status and not session.busy.status then
       session.branch = status.branch and status.branch.head or nil
     end
     log_session_error(session)
-    renderer.render(session)
+    if event and event.phase == "complete" then
+      content_renders:flush(session)
+    else
+      content_renders:request(session)
+    end
     reconcile_all_files(session)
   end,
 })
@@ -430,6 +446,7 @@ local function create_session(root, snapshot)
 end
 
 local function dispose_session(session)
+  content_renders:cancel(session)
   renderer.clear(session)
   layout.dispose(session)
   registry:remove(session.id)
@@ -671,6 +688,10 @@ end
 function M.setup(opts)
   local configured = config.setup(opts)
   if not configured.ok then return nil, configured.error end
+  content_renders = RenderQueue.new({
+    render = renderer.render,
+    delay_ms = configured.value.ui.render_delay_ms,
+  })
   M.setup_observers()
   if commands_registered then return true end
 

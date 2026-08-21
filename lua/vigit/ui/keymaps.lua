@@ -15,12 +15,14 @@ local entries = {
   { id = "view.focus_left", modes = { "n" }, lhs = "<C-w><Left>", aliases = { "<C-ц><Left>" }, contexts = { "diff", "changes" }, group = "view", description = "Focus left Vigit pane", intent = "focus_left", hint = false },
   { id = "view.focus_right", modes = { "n" }, lhs = "<C-w><Right>", aliases = { "<C-ц><Right>" }, contexts = { "diff", "changes" }, group = "view", description = "Focus right Vigit pane", intent = "focus_right", hint = false },
   { id = "change.activate", modes = { "n" }, lhs = "<CR>", contexts = { "changes" }, group = "navigation", description = "Open change or toggle directory", intent = "activate" },
+  { id = "change.mouse_select", modes = { "n" }, lhs = "<LeftMouse>", contexts = { "diff", "changes" }, group = "navigation", description = "Select a change or toggle a directory", intent = "mouse_select", hint = false, mouse = true },
+  { id = "change.mouse_activate", modes = { "n" }, lhs = "<2-LeftMouse>", contexts = { "diff", "changes" }, group = "navigation", description = "Open the selected change", intent = "mouse_activate", hint = false, mouse = true },
   { id = "change.next_file", modes = { "n" }, lhs = "]f", contexts = { "diff", "changes" }, group = "navigation", description = "Select next file", intent = "next_file" },
   { id = "navigation.open_file", modes = { "n" }, lhs = "e", contexts = { "diff", "changes" }, group = "navigation", description = "Open source file", intent = "open_file" },
   { id = "navigation.goto_definition", modes = { "n" }, lhs = "gd", contexts = { "diff", "changes" }, group = "navigation", description = "Go to source definition", intent = "goto_definition" },
   { id = "navigation.open_terminal", modes = { "n" }, lhs = "T", aliases = { "<leader>h" }, contexts = { "diff", "changes" }, group = "lifecycle", description = "Open or focus worktree terminal", intent = "open_terminal" },
   { id = "view.toggle_context", modes = { "n" }, lhs = "f", contexts = { "diff" }, group = "view", description = "Toggle full hunk context", intent = "toggle_context" },
-  { id = "change.toggle_index", modes = { "n" }, lhs = "s", contexts = { "diff", "changes" }, group = "git", description = "Stage or unstage current file", intent = "toggle_file_index" },
+  { id = "change.toggle_index", modes = { "n" }, lhs = "s", contexts = { "diff", "changes" }, group = "git", description = "Stage or unstage current file or directory", intent = "toggle_file_index" },
   { id = "hunk.toggle_index", modes = { "n" }, lhs = "S", contexts = { "diff" }, group = "git", description = "Stage or unstage current hunk", intent = "toggle_hunk_index" },
   { id = "hunk.restore", modes = { "n" }, lhs = "x", contexts = { "diff" }, group = "git", description = "Discard current unstaged hunk", intent = "restore_hunk" },
   { id = "change.restore", modes = { "n" }, lhs = "X", contexts = { "diff", "changes" }, group = "git", description = "Restore current file to HEAD", intent = "restore_file" },
@@ -203,7 +205,17 @@ local function apply_context(session, buffer, name)
   for _, entry in ipairs(M.for_context(name, mapping_config())) do
     for _, lhs in ipairs(bindings(entry)) do
       vim.keymap.set(entry.modes, lhs, function()
-        require("vigit.ui.controller").dispatch(session, entry.intent)
+        local intent = entry.intent
+        if entry.mouse then
+          local position = vim.fn.getmousepos()
+          intent = {
+            name = entry.intent,
+            winid = position.winid,
+            line = position.line,
+            column = position.column,
+          }
+        end
+        require("vigit.ui.controller").dispatch(session, intent)
       end, {
         buffer = buffer, desc = "Vigit: " .. entry.description, noremap = true, silent = true,
       })
@@ -214,7 +226,14 @@ end
 function M.apply(session)
   apply_context(session, session.owned.diff_buf, "diff")
   apply_context(session, session.owned.changes_buf, "changes")
-  local resize_autocmd = vim.api.nvim_create_autocmd({ "VimResized", "TabEnter" }, {
+  local owned_autocmds = {}
+  local function remember_autocmd(id)
+    owned_autocmds[#owned_autocmds + 1] = id
+    session.resources.autocmds = session.resources.autocmds or {}
+    session.resources.autocmds[#session.resources.autocmds + 1] = id
+    return id
+  end
+  remember_autocmd(vim.api.nvim_create_autocmd({ "VimResized", "TabEnter" }, {
     callback = function()
       if not session.closed and session.owned.tab
           and vim.api.nvim_tabpage_is_valid(session.owned.tab)
@@ -223,8 +242,8 @@ function M.apply(session)
       end
     end,
     desc = "Resize the active Vigit layout",
-  })
-  vim.api.nvim_create_autocmd("CursorMoved", {
+  }))
+  remember_autocmd(vim.api.nvim_create_autocmd("CursorMoved", {
     buffer = session.owned.changes_buf,
     callback = function()
       if not session.closed and session.view.diff_mode == "one_file" then
@@ -232,9 +251,32 @@ function M.apply(session)
       end
     end,
     desc = "Select the Vigit change under the cursor",
-  })
+  }))
+  local function viewport_changed()
+    if session.closed
+        or not session.owned.diff_win
+        or not vim.api.nvim_win_is_valid(session.owned.diff_win)
+        or vim.api.nvim_win_get_buf(session.owned.diff_win)
+          ~= session.owned.diff_buf then
+      return
+    end
+    require("vigit.ui.renderer").viewport_changed(session)
+  end
+  remember_autocmd(vim.api.nvim_create_autocmd("WinScrolled", {
+    callback = function(args)
+      if tonumber(args.match) == session.owned.diff_win then viewport_changed() end
+    end,
+    desc = "Refresh Vigit syntax for the diff viewport",
+  }))
+  remember_autocmd(vim.api.nvim_create_autocmd("CursorMoved", {
+    buffer = session.owned.diff_buf,
+    callback = viewport_changed,
+    desc = "Refresh Vigit syntax near the diff cursor",
+  }))
   local function on_owned_buffer_wipe()
-    pcall(vim.api.nvim_del_autocmd, resize_autocmd)
+    for _, autocmd in ipairs(owned_autocmds) do
+      pcall(vim.api.nvim_del_autocmd, autocmd)
+    end
     if not session.closed then
       vim.schedule(function()
         if session.closed then return end

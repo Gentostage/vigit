@@ -1247,6 +1247,8 @@ it("publishes the basic normal-mode key registry", function()
     "<C-w><Left>",
     "<C-w><Right>",
     "<CR>",
+    "<LeftMouse>",
+    "<2-LeftMouse>",
     "]f",
     "e",
     "gd",
@@ -1293,7 +1295,11 @@ it("publishes the basic normal-mode key registry", function()
     assert_truthy(type(entry.id) == "string" and entry.id ~= "")
     assert_truthy(type(entry.intent) == "string" and entry.intent ~= "")
   end
-  assert_equal(keymaps.entries[11].intent, "toggle_hunk_index")
+  local hunk_toggle
+  for _, entry in ipairs(keymaps.entries) do
+    if entry.id == "hunk.toggle_index" then hunk_toggle = entry end
+  end
+  assert_equal(hunk_toggle.intent, "toggle_hunk_index")
 end)
 
 it("validates setup options after public command registration", function()

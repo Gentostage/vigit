@@ -267,6 +267,8 @@ end
 
 local function add_syntax_layers(buffer, rendered, inspections, namespace)
   local group_cache = {}
+  local groups = {}
+  local group_order = {}
   for buffer_row, rendered_row in ipairs(rendered.rows or {}) do
     local side = row_side(rendered_row)
     local source_anchor = rendered_row.source_anchor
@@ -274,19 +276,74 @@ local function add_syntax_layers(buffer, rendered, inspections, namespace)
     local file = inspections[rendered_row.change_id]
     local inspection = file and side and file[side]
     if inspection and type(source_line) == "number" then
-      local source_row = source_line - 1
-      for _, capture in ipairs(inspection.captures or {}) do
-        add_capture(
-          buffer,
-          namespace,
-          buffer_row,
-          rendered_row.text or "",
-          source_row,
-          capture,
-          inspection.language,
-          group_cache
-        )
+      local key = rendered_row.change_id .. "\0" .. side
+      local group = groups[key]
+      if not group then
+        group = { inspection = inspection, rows = {} }
+        groups[key] = group
+        group_order[#group_order + 1] = key
       end
+      group.rows[#group.rows + 1] = {
+        buffer_row = buffer_row,
+        source_row = source_line - 1,
+        text = rendered_row.text or "",
+      }
+    end
+  end
+
+  for _, key in ipairs(group_order) do
+    local group = groups[key]
+    table.sort(group.rows, function(left, right)
+      if left.source_row == right.source_row then
+        return left.buffer_row < right.buffer_row
+      end
+      return left.source_row < right.source_row
+    end)
+    local captures = {}
+    for order, capture in ipairs(group.inspection.captures or {}) do
+      captures[#captures + 1] = {
+        capture = capture,
+        start_row = tonumber(capture.start_row) or math.huge,
+        end_row = tonumber(capture.end_row) or -math.huge,
+        order = order,
+      }
+    end
+    table.sort(captures, function(left, right)
+      if left.start_row ~= right.start_row then
+        return left.start_row < right.start_row
+      end
+      if left.end_row ~= right.end_row then
+        return left.end_row < right.end_row
+      end
+      return left.order < right.order
+    end)
+
+    local next_capture = 1
+    local active = {}
+    for _, row in ipairs(group.rows) do
+      while captures[next_capture]
+          and captures[next_capture].start_row <= row.source_row do
+        active[#active + 1] = captures[next_capture]
+        next_capture = next_capture + 1
+      end
+      local retained = {}
+      for _, indexed in ipairs(active) do
+        if indexed.end_row >= row.source_row then
+          retained[#retained + 1] = indexed
+          local capture = indexed.capture
+          add_capture(
+            buffer,
+            namespace,
+            row.buffer_row,
+            row.text,
+            row.source_row,
+            capture,
+            group.inspection.language,
+            group_cache
+          )
+        end
+      end
+      active = retained
     end
   end
 end
@@ -393,6 +450,27 @@ function M.apply_diff(buffer, rendered, inspections, namespace)
   add_view_layers(buffer, rendered, namespace)
   add_syntax_layers(buffer, rendered, inspections, namespace)
   add_symbol_layers(buffer, rendered, inspections, namespace)
+end
+
+function M.apply_structure(buffer, rendered, namespace)
+  if not buffer or not vim.api.nvim_buf_is_valid(buffer) then return end
+  M.setup()
+  vim.api.nvim_buf_clear_namespace(buffer, namespace, 0, -1)
+  add_view_layers(buffer, rendered, namespace)
+end
+
+function M.apply_syntax(buffer, rendered, inspections, namespace)
+  if not buffer or not vim.api.nvim_buf_is_valid(buffer) then return end
+  M.setup()
+  vim.api.nvim_buf_clear_namespace(buffer, namespace, 0, -1)
+  add_syntax_layers(buffer, rendered, inspections or {}, namespace)
+end
+
+function M.apply_symbols(buffer, rendered, inspections, namespace)
+  if not buffer or not vim.api.nvim_buf_is_valid(buffer) then return end
+  M.setup()
+  vim.api.nvim_buf_clear_namespace(buffer, namespace, 0, -1)
+  add_symbol_layers(buffer, rendered, inspections or {}, namespace)
 end
 
 return M
