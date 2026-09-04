@@ -177,12 +177,13 @@ local function loaded_within(entry_path, loaded_paths, platform)
   return false
 end
 
-function M.removal_blocker(entry, loaded_paths, platform)
+function M.removal_blocker(entry, loaded_paths, platform, options)
   entry = entry or {}
+  options = options or {}
   if entry.kind == "root" then return "root" end
   if entry.locked then return "locked" end
   if entry.prunable then return "prunable" end
-  if changed_count(entry) > 0 then return "dirty" end
+  if changed_count(entry) > 0 and options.force ~= true then return "dirty" end
   local upstream = entry.upstream
   if type(upstream) == "table"
       and upstream.state == "tracking"

@@ -223,13 +223,23 @@ Press `W` to open the picker. It distinguishes `ROOT` and linked `WT` entries
 and shows branch, changed-file count, and upstream state. Network fetches are
 never hidden; press `F` to fetch explicitly.
 
-`d` removes only a linked worktree when all safety checks pass:
+`d` removes a linked worktree when all safety checks pass:
 
 - Git status is clean;
-- the branch has an upstream;
-- `ahead == 0`;
+- a verified upstream has `ahead == 0`; a missing or unavailable upstream adds
+  a warning to the confirmation instead of blocking removal;
 - no loaded source buffer belongs to that worktree;
 - the repeated preflight after `y` returns the same safe result.
+
+Press `D` to force-remove a dirty worktree. The `y/N` confirmation shows its
+`S/M/?` counts and warns that local changes will be discarded. Force removal
+only bypasses the clean-status requirement: `ROOT`, locked worktrees,
+unpublished ahead commits, and loaded source buffers remain protected.
+
+When `d` targets a prunable entry whose directory or `.git` link has already
+disappeared, Vigit offers to run Git's stale-metadata cleanup instead of probing
+the missing directory. Git may prune other stale records in the same repository,
+which is stated in the confirmation.
 
 Vigit removes only the inactive cached session, keeps the Git branch, and never
 closes source buffers or unrelated terminal splits. A running Vigit terminal is

@@ -621,6 +621,143 @@ it("повторно проверяет worktree после confirmation до re
   assert_equal(result.error.code, "dirty")
 end)
 
+it("force remove удаляет dirty worktree только после явного подтверждения", function()
+  local Worktrees = require("vigit.application.worktrees")
+  local Result = require("vigit.core.result")
+  local entry = {
+    kind = "linked",
+    path = "/repo/linked",
+    head = "linked-head",
+    branch_ref = "refs/heads/linked",
+    files = { staged = 2, unstaged = 3, untracked = 4 },
+    upstream = { state = "tracking", source = "local_refs", ahead = 0, behind = 0 },
+  }
+  local prompt
+  local remove_options
+  local list_calls = 0
+  local app = Worktrees.new({
+    git = {
+      worktrees = function(_, _, callback)
+        list_calls = list_calls + 1
+        callback(Result.ok(list_calls == 1 and {
+          { kind = "root", path = "/repo", head = "root", branch_ref = "refs/heads/main" },
+          entry,
+        } or {
+          { kind = "root", path = "/repo", head = "root", branch_ref = "refs/heads/main" },
+        }))
+        return { cancel = function() end }
+      end,
+      worktree_status = function(_, _, callback)
+        callback(Result.ok({ staged = 2, unstaged = 3, untracked = 4 }))
+        return { cancel = function() end }
+      end,
+      upstream = function(_, _, callback)
+        callback(Result.ok({ state = "tracking", source = "local_refs", ahead = 0, behind = 0 }))
+        return { cancel = function() end }
+      end,
+      remove_worktree = function(_, _, _, callback, options)
+        remove_options = options
+        callback(Result.ok(true))
+        return { cancel = function() end }
+      end,
+    },
+    neovim = { loaded_source_buffers = function() return Result.ok({}) end },
+    confirm = function(message, callback)
+      prompt = message
+      callback(true)
+      return { cancel = function() end }
+    end,
+  })
+  local result
+
+  app:remove(entry, function(value) result = value end, { root = "/repo" }, { force = true })
+
+  assert_truthy(result.ok)
+  assert_truthy(prompt:find("S:2 M:3 ?:4", 1, true) ~= nil)
+  assert_equal(remove_options.force, true)
+end)
+
+it("safe remove очищает stale metadata без status probe отсутствующего worktree", function()
+  local Worktrees = require("vigit.application.worktrees")
+  local Result = require("vigit.core.result")
+  local entry = {
+    kind = "linked",
+    path = "/tmp/missing-worktree",
+    head = "detached-head",
+    detached = true,
+    prunable = "gitdir file points to non-existent location",
+  }
+  local prompt
+  local pruned_root
+  local status_calls = 0
+  local app = Worktrees.new({
+    git = {
+      prune_worktrees = function(_, root, callback)
+        pruned_root = root
+        callback(Result.ok(true))
+        return { cancel = function() end }
+      end,
+      worktrees = function(_, root, callback)
+        assert_equal(root, "/repo")
+        callback(Result.ok({
+          { kind = "root", path = "/repo", head = "root", branch_ref = "refs/heads/main" },
+        }))
+        return { cancel = function() end }
+      end,
+      worktree_status = function()
+        status_calls = status_calls + 1
+        error("missing worktree must not be probed")
+      end,
+    },
+    confirm = function(message, callback)
+      prompt = message
+      callback(true)
+      return { cancel = function() end }
+    end,
+  })
+  local result
+
+  app:remove(entry, function(value) result = value end, { root = "/repo" })
+
+  assert_truthy(result.ok)
+  assert_equal(pruned_root, "/repo")
+  assert_equal(status_calls, 0)
+  assert_truthy(prompt:find("stale worktree metadata", 1, true) ~= nil)
+end)
+
+it("не очищает stale metadata у locked worktree", function()
+  local Worktrees = require("vigit.application.worktrees")
+  local Result = require("vigit.core.result")
+  local confirmations = 0
+  local prunes = 0
+  local app = Worktrees.new({
+    git = {
+      prune_worktrees = function()
+        prunes = prunes + 1
+        return { cancel = function() end }
+      end,
+    },
+    confirm = function()
+      confirmations = confirmations + 1
+    end,
+  })
+  local result
+
+  app:remove({
+    kind = "linked",
+    path = "/tmp/missing-worktree",
+    head = "head",
+    detached = true,
+    locked = "administrative lock",
+    prunable = "gitdir file points to non-existent location",
+  }, function(value) result = value end, { root = "/repo" })
+
+  assert_equal(result.ok, false)
+  assert_equal(result.error.code, "locked")
+  assert_equal(confirmations, 0)
+  assert_equal(prunes, 0)
+end)
+
 it("предупреждает перед удалением worktree без проверенного upstream", function()
   local Worktrees = require("vigit.application.worktrees")
   local Result = require("vigit.core.result")
@@ -828,11 +965,6 @@ it("не читает buffers и не спрашивает confirmation для �
       locked = "lock",
       want = "locked",
       message = "Cannot remove: worktree is locked",
-    },
-    {
-      prunable = "gone",
-      want = "prunable",
-      message = "Cannot remove: worktree metadata is stale",
     },
     {
       files = { staged = 1, unstaged = 0, untracked = 0 },

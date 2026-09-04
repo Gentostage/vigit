@@ -436,7 +436,8 @@ function Git:worktrees(root, callback)
   end)
 end
 
-function Git:remove_worktree(primary_root, target_root, callback)
+function Git:remove_worktree(primary_root, target_root, callback, options)
+  options = options or {}
   local cancelled = false
   local completed = false
   local function complete(result)
@@ -444,15 +445,17 @@ function Git:remove_worktree(primary_root, target_root, callback)
     completed = true
     callback(result)
   end
-  local handle = self.process.run({
+  local command = {
     "git",
     "-C",
     primary_root,
     "worktree",
     "remove",
-    "--",
-    target_root,
-  }, {}, function(result)
+  }
+  if options.force == true then command[#command + 1] = "--force" end
+  command[#command + 1] = "--"
+  command[#command + 1] = target_root
+  local handle = self.process.run(command, {}, function(result)
     if not result.ok then
       complete(Result.err(
         "git_failed",
@@ -470,6 +473,28 @@ function Git:remove_worktree(primary_root, target_root, callback)
       if handle and handle.cancel then handle.cancel() end
     end,
   }
+end
+
+function Git:prune_worktrees(primary_root, callback)
+  return self.process.run({
+    "git",
+    "-C",
+    primary_root,
+    "worktree",
+    "prune",
+    "--expire",
+    "now",
+  }, {}, function(result)
+    if not result.ok then
+      callback(Result.err(
+        "git_failed",
+        "Git worktree metadata cleanup failed",
+        result.error and (result.error.details or result.error.message)
+      ))
+      return
+    end
+    callback(Result.ok(true))
+  end)
 end
 
 function Git:worktree_status(root, callback)

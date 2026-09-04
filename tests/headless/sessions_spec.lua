@@ -1280,6 +1280,7 @@ it("publishes the basic normal-mode key registry", function()
     "r",
     "F",
     "d",
+    "D",
     "q",
     "]h",
     "[h",

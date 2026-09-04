@@ -39,6 +39,16 @@ it("registers single and double mouse actions only for Vigit panes", function()
   assert_equal(mouse["<LeftMouse>"].hint, false)
 end)
 
+it("разделяет safe и force удаление worktree", function()
+  local by_lhs = {}
+  for _, entry in ipairs(keymaps.for_context("worktrees")) do
+    by_lhs[entry.lhs] = entry
+  end
+
+  assert_equal(by_lhs.d.intent, "remove_worktree")
+  assert_equal(by_lhs.D.intent, "force_remove_worktree")
+end)
+
 it("omits disabled mappings from a context", function()
   local entries = keymaps.for_context("diff", {
     keymaps = { ["change.restore"] = false },

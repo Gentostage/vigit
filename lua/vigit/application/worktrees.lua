@@ -16,8 +16,24 @@ local removal_messages = {
   loaded_source_buffer = "Cannot remove: close source buffers from this worktree first",
 }
 
-local function removal_confirmation(entry)
-  local message = "Remove " .. entry.path .. "? Branch will be kept."
+local function change_summary(entry)
+  local files = entry.files or {}
+  return string.format(
+    "S:%d M:%d ?:%d",
+    tonumber(files.staged) or 0,
+    tonumber(files.unstaged) or 0,
+    tonumber(files.untracked) or 0
+  )
+end
+
+local function removal_confirmation(entry, options)
+  local message
+  if options and options.force == true then
+    message = "Force remove " .. entry.path .. "? Local changes ("
+      .. change_summary(entry) .. ") will be discarded. Branch will be kept."
+  else
+    message = "Remove " .. entry.path .. "? Branch will be kept."
+  end
   local probe = entry.probes and entry.probes.upstream
   if probe and probe.state == "error" then
     return message
@@ -31,6 +47,11 @@ local function removal_confirmation(entry)
       .. " Warning: upstream is not configured; commits may not be published."
   end
   return message
+end
+
+local function stale_confirmation(entry)
+  return "Clean stale worktree metadata for " .. entry.path
+    .. "? Other stale worktree records may also be pruned."
 end
 
 local function basename(path)
@@ -235,16 +256,34 @@ function Worktrees:_loaded_paths(root)
   return Result.ok(paths)
 end
 
-function Worktrees:_removal_blocker(entry, root)
+function Worktrees:_removal_blocker(entry, root, options)
   local platform = self.neovim and self.neovim.platform
-  local static = worktree_policy.removal_blocker(entry, {}, platform)
+  local static = worktree_policy.removal_blocker(entry, {}, platform, options)
   if static then return static, nil end
   local loaded = self:_loaded_paths(root or entry.path)
   if not loaded.ok then return nil, loaded end
-  return worktree_policy.removal_blocker(entry, loaded.value, platform), nil
+  return worktree_policy.removal_blocker(entry, loaded.value, platform, options), nil
 end
 
-function Worktrees:remove(entry, callback, origin)
+local function prune_root(self, target, origin)
+  local platform = self.neovim and self.neovim.platform
+  local candidates = {}
+  if type(origin) == "table" then candidates[#candidates + 1] = origin.root end
+  candidates[#candidates + 1] = self:_active_root()
+  for _, row in ipairs(self.rows or {}) do
+    if row.kind == "root" then candidates[#candidates + 1] = row.path end
+  end
+  for _, candidate in ipairs(candidates) do
+    if type(candidate) == "string"
+        and candidate ~= ""
+        and not same_root(candidate, target.path, platform) then
+      return candidate
+    end
+  end
+end
+
+function Worktrees:remove(entry, callback, origin, options)
+  options = options or {}
   local cancelled = false
   local mutation_started = false
   local detached = false
@@ -283,16 +322,86 @@ function Worktrees:remove(entry, callback, origin)
     complete(Result.err("worktree_missing", "Selected worktree is unavailable"))
     return { cancel = cancel }
   end
+  if entry.kind == "root" then
+    fail_blocker("root")
+    return { cancel = cancel }
+  end
+  if entry.locked then
+    fail_blocker("locked")
+    return { cancel = cancel }
+  end
+  if entry.prunable then
+    local root = prune_root(self, entry, origin)
+    if not root then
+      complete(Result.err(
+        "worktree_root_unavailable",
+        "Cannot locate a surviving worktree for metadata cleanup"
+      ))
+      return { cancel = cancel }
+    end
+    if type(self.git.prune_worktrees) ~= "function" then
+      complete(Result.err(
+        "worktree_prune_unavailable",
+        "Git worktree metadata cleanup is unavailable"
+      ))
+      return { cancel = cancel }
+    end
+    local confirmation = self.confirm(stale_confirmation(entry), once(function(accepted)
+      if cancelled then return end
+      if accepted ~= true then
+        complete(Result.err("confirmation_cancelled", "Worktree metadata cleanup was cancelled"))
+        return
+      end
+      mutation_started = true
+      add_handle(self.git:prune_worktrees(root, once(function(prune_result)
+        if cancelled then return end
+        if not prune_result.ok then complete(prune_result); return end
+        add_handle(self.git:worktrees(root, once(function(postcondition)
+          if cancelled then return end
+          if not postcondition.ok then complete(postcondition); return end
+          for _, candidate in ipairs(postcondition.value) do
+            if same_root(candidate.path, entry.path, self.neovim and self.neovim.platform) then
+              complete(Result.err(
+                "unsafe_worktree",
+                "Stale worktree metadata remains registered after cleanup"
+              ))
+              return
+            end
+          end
+          local session = session_at_root(
+            self.registry,
+            entry.path,
+            self.neovim and self.neovim.platform
+          )
+          if session and not session.closed and type(self.close_session) == "function" then
+            local closed, close_error = pcall(self.close_session, session)
+            if not closed then
+              complete(Result.err(
+                "session_close_failed",
+                "Pruned worktree Vigit session could not be closed",
+                close_error
+              ))
+              return
+            end
+          end
+          complete(Result.ok({ path = entry.path, origin = origin }))
+        end)))
+      end)))
+    end))
+    add_handle(confirmation)
+    return { cancel = cancel }
+  end
   local static_blocker = worktree_policy.removal_blocker(
     entry,
     {},
-    self.neovim and self.neovim.platform
+    self.neovim and self.neovim.platform,
+    options
   )
   if static_blocker then
     fail_blocker(static_blocker)
     return { cancel = cancel }
   end
-  local initial_blocker, initial_error = self:_removal_blocker(entry, entry.path)
+  local initial_blocker, initial_error = self:_removal_blocker(entry, entry.path, options)
   if initial_error then
     complete(initial_error)
     return { cancel = cancel }
@@ -304,7 +413,7 @@ function Worktrees:remove(entry, callback, origin)
   local confirmed_identity = worktree_identity(entry)
 
   local confirmation = self.confirm(
-    removal_confirmation(entry),
+    removal_confirmation(entry, options),
     once(function(accepted)
       if cancelled then return end
       if accepted ~= true then
@@ -354,7 +463,7 @@ function Worktrees:remove(entry, callback, origin)
                 error = upstream_result.error,
               }
             end
-            local blocker, blocker_error = self:_removal_blocker(target, target.path)
+            local blocker, blocker_error = self:_removal_blocker(target, target.path, options)
             if blocker_error then complete(blocker_error); return end
             if blocker then fail_blocker(blocker); return end
             local relocated = relocate_origin(self, origin, target, primary)
@@ -400,7 +509,7 @@ function Worktrees:remove(entry, callback, origin)
                   origin = relocated.value,
                 }))
               end)))
-            end)))
+            end), { force = options.force == true }))
           end)))
         end)))
       end)))

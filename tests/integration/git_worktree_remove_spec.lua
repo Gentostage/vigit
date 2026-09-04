@@ -99,6 +99,42 @@ it("возвращает git_failed при неуспешном процессе
   end)
 end)
 
+it("передаёт --force только для явного force removal", function(done)
+  local command
+  local adapter = git_cli.new({
+    run = function(args, _, callback)
+      command = args
+      callback(Result.ok({ stdout = "", stderr = "" }))
+      return { cancel = function() end }
+    end,
+  })
+
+  adapter:remove_worktree("/repo", "/repo/linked", function(result)
+    assert_truthy(result.ok)
+    assert_equal(table.concat(command, " "),
+      "git -C /repo worktree remove --force -- /repo/linked")
+    done()
+  end, { force = true })
+end)
+
+it("очищает stale worktree metadata через expire now", function(done)
+  local command
+  local adapter = git_cli.new({
+    run = function(args, _, callback)
+      command = args
+      callback(Result.ok({ stdout = "", stderr = "" }))
+      return { cancel = function() end }
+    end,
+  })
+
+  adapter:prune_worktrees("/repo", function(result)
+    assert_truthy(result.ok)
+    assert_equal(table.concat(command, " "),
+      "git -C /repo worktree prune --expire now")
+    done()
+  end)
+end)
+
 it("принимает remove completion только один раз и подавляет callback после cancel", function(done)
   local active
   local adapter = git_cli.new({

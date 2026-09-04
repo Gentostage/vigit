@@ -554,7 +554,7 @@ function M.open(opts)
     end)
     pending.cancel = handle and handle.cancel
   end
-  function picker:remove()
+  function picker:remove(force)
     local target = selected(self)
     if not target then return end
     if self.pending_remove and self.pending_remove.cancel then pcall(self.pending_remove.cancel) end
@@ -582,7 +582,7 @@ function M.open(opts)
       end
       self.selected_path = self.origin.root
       self:refresh()
-    end, self.origin)
+    end, self.origin, { force = force == true })
     pending.cancel = handle and handle.cancel
     return handle
   end
@@ -605,6 +605,7 @@ function M.open(opts)
     refresh_worktrees = function() picker:refresh() end,
     fetch_worktree = function() picker:fetch() end,
     remove_worktree = function() picker:remove() end,
+    force_remove_worktree = function() picker:remove(true) end,
     previous_worktree = function() move(picker, -1) end,
     next_worktree = function() move(picker, 1) end,
   })
