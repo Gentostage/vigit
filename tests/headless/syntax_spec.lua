@@ -607,6 +607,117 @@ it("проходит captures sweep-ом и сохраняет multiline interse
   vim.api.nvim_buf_delete(buffer, { force = true })
 end)
 
+it("дополняет class-only hunk ближайшим изменённым методом", function()
+  local namespace = vim.api.nvim_create_namespace("vigit-test-hunk-method-context")
+  local buffer = vim.api.nvim_create_buf(false, true)
+  local change_id = "unstaged\0service.py"
+  local rendered = {
+    lines = {
+      "@@ -8 +8 @@ class PaymentService:",
+      "  def validate(self):",
+    },
+    rows = {
+      {
+        text = "@@ -8 +8 @@ class PaymentService:",
+        kind = "hunk",
+        change_id = change_id,
+        source_anchor = { side = "new", source_line = 8 },
+      },
+      {
+        text = "  def validate(self):",
+        kind = "add",
+        change_id = change_id,
+        source_anchor = { side = "new", source_line = 9 },
+      },
+    },
+  }
+  local inspections = {
+    [change_id] = {
+      new = manual_inspection({}, {
+        {
+          kind = "method",
+          name = "validate",
+          label = "PaymentService.validate()",
+          start_row = 8,
+          end_row = 11,
+          declaration_row = 8,
+        },
+      }),
+    },
+  }
+  vim.api.nvim_buf_set_lines(buffer, 0, -1, false, rendered.lines)
+
+  highlights.apply_diff(buffer, rendered, inspections, namespace)
+
+  local context = assert(find_extmark(
+    buffer,
+    namespace,
+    1,
+    function(details)
+      return details.virt_text
+        and details.virt_text[1]
+        and details.virt_text[1][1] == " · validate()"
+    end
+  ))
+  assert_equal(context.priority, highlights.priorities.symbol)
+  vim.api.nvim_buf_delete(buffer, { force = true })
+end)
+
+it("берёт method context удалённого hunk из old snapshot", function()
+  local namespace = vim.api.nvim_create_namespace("vigit-test-deleted-hunk-method")
+  local buffer = vim.api.nvim_create_buf(false, true)
+  local change_id = "unstaged\0service.py"
+  local rendered = {
+    lines = {
+      "@@ -8 +8 @@ class PaymentService:",
+      "  def reject(self):",
+    },
+    rows = {
+      {
+        text = "@@ -8 +8 @@ class PaymentService:",
+        kind = "hunk",
+        change_id = change_id,
+        source_anchor = { side = "old", source_line = 8 },
+      },
+      {
+        text = "  def reject(self):",
+        kind = "delete",
+        change_id = change_id,
+        source_anchor = { side = "old", source_line = 9 },
+      },
+    },
+  }
+  local inspections = {
+    [change_id] = {
+      old = manual_inspection({}, {
+        {
+          kind = "method",
+          name = "reject",
+          label = "PaymentService.reject()",
+          start_row = 8,
+          end_row = 11,
+          declaration_row = 8,
+        },
+      }),
+    },
+  }
+  vim.api.nvim_buf_set_lines(buffer, 0, -1, false, rendered.lines)
+
+  highlights.apply_diff(buffer, rendered, inspections, namespace)
+
+  assert(find_extmark(
+    buffer,
+    namespace,
+    1,
+    function(details)
+      return details.virt_text
+        and details.virt_text[1]
+        and details.virt_text[1][1] == " · reject()"
+    end
+  ))
+  vim.api.nvim_buf_delete(buffer, { force = true })
+end)
+
 it("labels only hidden declarations and discards stale scheduled inspection", function()
   local namespace = vim.api.nvim_create_namespace("vigit-test-symbol-context")
   local buffer = vim.api.nvim_create_buf(false, true)

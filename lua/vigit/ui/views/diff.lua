@@ -177,6 +177,13 @@ local function typed_error(error)
   return "Error: " .. message
 end
 
+local function display_hunk_header(header)
+  local context = tostring(header or ""):match("^@@ .- @@%s*(.*)$")
+  if context == nil then return tostring(header or "") end
+  if context == "" then return "@@" end
+  return context
+end
+
 local function render_file(output, change, diff, loading, file_error)
   local section = (change.section or diff and diff.section or ""):upper()
   local path = change.path or diff and diff.path or "unknown"
@@ -298,7 +305,7 @@ local function render_file(output, change, diff, loading, file_error)
     local hunk_line = hunk_side == "old" and hunk.old_start or hunk.new_start
     add_line(
       output,
-      escape_control(hunk.header),
+      escape_control(display_hunk_header(hunk.header)),
       "DiffText",
       nil,
       row_metadata(change, diff, "hunk", {

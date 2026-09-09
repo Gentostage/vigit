@@ -649,7 +649,7 @@ it("returns file hit targets and marker-free view models", function()
   local diff = diff_view.render(state, 20)
   local hunk_row
   for row, line in ipairs(diff.lines) do
-    if line == "@@ -1 +1 @@" then
+    if line == "@@" then
       hunk_row = row
       break
     end
@@ -747,6 +747,51 @@ it("renders every tree directory with semantic status and icon highlights", func
     table.concat(collapsed.lines, "\n"):find("invoice.lua", 1, true),
     nil
   )
+end)
+
+it("renders directories before files at every tree level", function()
+  local function change(path)
+    return {
+      id = "unstaged\0" .. path,
+      section = "unstaged",
+      status = "?",
+      path = path,
+    }
+  end
+  local output = changes_view.render({
+    view = { changes_mode = "tree" },
+    data = {
+      status = {
+        staged = {},
+        unstaged = {
+          change("src/office/api/routes.py"),
+          change("src/office/auth/session.py"),
+          change("src/office/composition.py"),
+          change("src/office/config.py"),
+          change("src/office/web/routes.py"),
+        },
+      },
+    },
+  }, 80, {
+    icons = {
+      directory = function() return "D", "VigitChangesDirectory" end,
+      file = function() return "F", "VigitChangesFile" end,
+    },
+  })
+
+  assert_equal(table.concat(output.lines, "\n"), table.concat({
+    "Unstaged (5)",
+    "▾ D src/",
+    " ▾ D office/",
+    "  ▾ D api/",
+    "   ? F routes.py",
+    "  ▾ D auth/",
+    "   ? F session.py",
+    "  ▾ D web/",
+    "   ? F routes.py",
+    "  ? F composition.py",
+    "  ? F config.py",
+  }, "\n"))
 end)
 
 it("highlights only the selected change row in the changes tree", function()

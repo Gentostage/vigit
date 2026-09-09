@@ -151,6 +151,22 @@ local function build_tree(changes)
       change = change,
     }
   end
+
+  local function sort_entries(node)
+    table.sort(node.entries, function(left, right)
+      if left.kind ~= right.kind then
+        return left.kind == "directory"
+      end
+      return left.name < right.name
+    end)
+    for _, entry in ipairs(node.entries) do
+      if entry.kind == "directory" then
+        sort_entries(entry)
+      end
+    end
+  end
+
+  sort_entries(root)
   return root
 end
 

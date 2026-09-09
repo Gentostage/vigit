@@ -381,6 +381,47 @@ local function symbol_at(symbols, source_row)
   return best
 end
 
+local function first_changed_method(rendered, hunk_row, inspections)
+  local rows = rendered.rows or {}
+  local hunk = rows[hunk_row]
+  local file = hunk and inspections[hunk.change_id]
+  if not hunk or not file then return nil end
+
+  local function find(kind, side)
+    local inspection = file[side]
+    if not inspection then return nil end
+    for row = hunk_row + 1, #rows do
+      local candidate = rows[row]
+      if candidate.change_id ~= hunk.change_id
+          or candidate.kind == "hunk"
+          or candidate.kind == "file_header" then
+        break
+      end
+      local source_anchor = candidate.source_anchor
+      if candidate.kind == kind
+          and source_anchor
+          and source_anchor.side == side
+          and type(source_anchor.source_line) == "number" then
+        local symbol = symbol_at(
+          inspection.symbols,
+          source_anchor.source_line - 1
+        )
+        if symbol and symbol.kind == "method" then return symbol end
+      end
+    end
+  end
+
+  return find("add", "new") or find("delete", "old")
+end
+
+local function class_method_context(header, symbol)
+  if not symbol or symbol.kind ~= "method" or not symbol.name then return nil end
+  if header:find(symbol.name, 1, true) then return nil end
+  local owner = symbol.label and symbol.label:match("^(.+)%.[^.]+%(%)$")
+  if not owner or not header:find(owner, 1, true) then return nil end
+  return symbol.name .. "()"
+end
+
 local function hunk_describes_symbol(rendered, gap_row, symbol)
   local hunk = rendered.rows and rendered.rows[gap_row + 1]
   if not hunk
@@ -406,7 +447,29 @@ local function add_symbol_layers(buffer, rendered, inspections, namespace)
     local source_anchor = rendered_row.source_anchor
     local file = inspections[rendered_row.change_id]
     local inspection = file and file.new
-    if rendered_row.kind == "gap"
+    if rendered_row.kind == "hunk" then
+      local context = class_method_context(
+        rendered_row.text or "",
+        first_changed_method(rendered, buffer_row, inspections)
+      )
+      if context then
+        vim.api.nvim_buf_set_extmark(
+          buffer,
+          namespace,
+          buffer_row - 1,
+          0,
+          {
+            virt_text = {
+              { " · " .. context, "VigitSymbolContext" },
+            },
+            virt_text_pos = "eol",
+            hl_mode = "combine",
+            priority = M.priorities.symbol,
+            strict = false,
+          }
+        )
+      end
+    elseif rendered_row.kind == "gap"
         and source_anchor
         and source_anchor.side == "new"
         and type(source_anchor.source_line) == "number"

@@ -273,8 +273,33 @@ it("hides technical Git patch headers from the review surface", function()
     assert_equal(text:find("--- a/src/a.lua", 1, true), nil)
     assert_equal(text:find("+++ b/src/a.lua", 1, true), nil)
     assert_equal(rendered.lines[1], "[UNSTAGED] src/a.lua")
-    assert_truthy(text:find("@@ -1,3 +1,3 @@", 1, true))
+    assert_equal(text:find("@@ -1,3 +1,3 @@", 1, true), nil)
+    local _, hunk = find_row(rendered, "hunk")
+    assert_equal(hunk.text, "@@")
     assert_equal(parsed.headers[1], "diff --git a/src/a.lua b/src/a.lua")
+  end)
+end)
+
+it("скрывает координаты hunk и сохраняет исходный Git header", function()
+  with_vim(function()
+    local parsed = parse_patch({
+      "diff --git a/src/a.lua b/src/a.lua",
+      "--- a/src/a.lua",
+      "+++ b/src/a.lua",
+      "@@ -46,7 +46,13 @@ class AdjustmentRejectCommand:",
+      "-old",
+      "+new",
+      "",
+    })
+
+    local rendered = diff_view.render(state_with(parsed), 100)
+    local _, hunk = find_row(rendered, "hunk")
+
+    assert_equal(hunk.text, "class AdjustmentRejectCommand:")
+    assert_equal(
+      parsed.hunks[1].header,
+      "@@ -46,7 +46,13 @@ class AdjustmentRejectCommand:"
+    )
   end)
 end)
 
