@@ -27,6 +27,7 @@ local open_comments
 
 local supported_intents = {
   toggle_focus = true, focus_left = true, focus_right = true,
+  focus_up = true, focus_down = true,
   activate = true, select_change = true, next_file = true,
   previous_file = true, next_hunk = true, previous_hunk = true,
   toggle_all_files = true, toggle_changes_mode = true, toggle_file_index = true,
@@ -1195,8 +1196,9 @@ function M.dispatch(session, intent)
   if name == "toggle_focus" then
     layout.toggle_changes(session)
     renderer.render(session)
-  elseif name == "focus_left" or name == "focus_right" then
-    layout.focus_direction(session, name == "focus_left" and "left" or "right")
+  elseif name == "focus_left" or name == "focus_right"
+      or name == "focus_up" or name == "focus_down" then
+    layout.focus_direction(session, name:sub(7))
   elseif name == "activate" then
     activate(session, intent)
   elseif name == "select_change" then

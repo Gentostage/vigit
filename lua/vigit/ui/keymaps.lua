@@ -13,11 +13,13 @@ local hint_labels = {
 
 local entries = {
   { id = "view.toggle_focus", modes = { "n" }, lhs = "<Tab>", contexts = { "diff", "changes" }, group = "view", description = "Switch diff and changes", intent = "toggle_focus" },
-  { id = "view.focus_left", modes = { "n" }, lhs = "<C-w><Left>", aliases = { "<C-ц><Left>" }, contexts = { "diff", "changes" }, group = "view", description = "Focus left Vigit pane", intent = "focus_left", hint = false },
-  { id = "view.focus_right", modes = { "n" }, lhs = "<C-w><Right>", aliases = { "<C-ц><Right>" }, contexts = { "diff", "changes" }, group = "view", description = "Focus right Vigit pane", intent = "focus_right", hint = false },
+  { id = "view.focus_left", modes = { "n", "x" }, lhs = "<C-w><Left>", aliases = { "<C-ц><Left>", "<C-w>h", "<C-w><C-h>", "<C-w>р", "<C-ц>h", "<C-ц><C-h>", "<C-ц>р" }, contexts = { "diff", "changes" }, group = "view", description = "Focus left Vigit pane", intent = "focus_left", hint = false },
+  { id = "view.focus_right", modes = { "n", "x" }, lhs = "<C-w><Right>", aliases = { "<C-ц><Right>", "<C-w>l", "<C-w><C-l>", "<C-w>д", "<C-ц>l", "<C-ц><C-l>", "<C-ц>д" }, contexts = { "diff", "changes" }, group = "view", description = "Focus right Vigit pane", intent = "focus_right", hint = false },
+  { id = "view.focus_up", modes = { "n", "x" }, lhs = "<C-w><Up>", aliases = { "<C-ц><Up>", "<C-w>k", "<C-w><C-k>", "<C-w>л", "<C-ц>k", "<C-ц><C-k>", "<C-ц>л" }, contexts = { "diff", "changes" }, group = "view", description = "Keep focus in Vigit (no pane above)", intent = "focus_up", hint = false },
+  { id = "view.focus_down", modes = { "n", "x" }, lhs = "<C-w><Down>", aliases = { "<C-ц><Down>", "<C-w>j", "<C-w><C-j>", "<C-w>о", "<C-ц>j", "<C-ц><C-j>", "<C-ц>о" }, contexts = { "diff", "changes" }, group = "view", description = "Keep focus in Vigit (no pane below)", intent = "focus_down", hint = false },
   { id = "change.activate", modes = { "n" }, lhs = "<CR>", contexts = { "changes" }, group = "navigation", description = "Open change or toggle directory", intent = "activate" },
-  { id = "change.mouse_select", modes = { "n" }, lhs = "<LeftMouse>", contexts = { "diff", "changes" }, group = "navigation", description = "Select a change or toggle a directory", intent = "mouse_select", hint = false, mouse = true },
-  { id = "change.mouse_activate", modes = { "n" }, lhs = "<2-LeftMouse>", contexts = { "diff", "changes" }, group = "navigation", description = "Open the selected change", intent = "mouse_activate", hint = false, mouse = true },
+  { id = "change.mouse_select", modes = { "n" }, lhs = "<LeftMouse>", contexts = { "diff", "changes" }, group = "navigation", description = "Select a change or toggle a directory in the tree", intent = "mouse_select", hint = false, mouse = true },
+  { id = "change.mouse_activate", modes = { "n" }, lhs = "<2-LeftMouse>", contexts = { "diff", "changes" }, group = "navigation", description = "Open the selected tree change (diff: select word)", intent = "mouse_activate", hint = false, mouse = true },
   { id = "change.next_file", modes = { "n" }, lhs = "]f", contexts = { "diff", "changes" }, group = "navigation", description = "Select next file", intent = "next_file" },
   { id = "navigation.open_file", modes = { "n" }, lhs = "e", contexts = { "diff", "changes" }, group = "navigation", description = "Open source file", intent = "open_file" },
   { id = "navigation.goto_definition", modes = { "n" }, lhs = "gd", contexts = { "diff", "changes" }, group = "navigation", description = "Go to source definition", intent = "goto_definition" },
@@ -203,31 +205,52 @@ local function mapping_config()
   return require("vigit.config").get()
 end
 
-local function apply_context(session, buffer, name)
+local function apply_context(session, buffer, name, mouse_intents)
   for _, entry in ipairs(M.for_context(name, mapping_config())) do
+    local mouse_action, pending_mouse
+    if entry.mouse then
+      mouse_action = "<Plug>(Vigit-" .. session.id .. "-" .. entry.id .. ")"
+      pending_mouse = mouse_intents[entry.id] or {}
+      mouse_intents[entry.id] = pending_mouse
+      vim.keymap.set(entry.modes, mouse_action, function()
+        local intent = table.remove(pending_mouse, 1)
+        if intent then require("vigit.ui.controller").dispatch(session, intent) end
+      end, {
+        buffer = buffer, desc = "Vigit: " .. entry.description, noremap = true, silent = true,
+      })
+    end
     for _, lhs in ipairs(bindings(entry)) do
       vim.keymap.set(entry.modes, lhs, function()
         local intent = entry.intent
         if entry.mouse then
           local position = vim.fn.getmousepos()
+          -- Mappings resolve in the current buffer, not the clicked pane.
+          -- Preserve native mouse press state for diff drag/word selection.
+          if position.winid ~= session.owned.changes_win then return lhs end
           intent = {
             name = entry.intent,
             winid = position.winid,
             line = position.line,
             column = position.column,
           }
+          -- Run outside expression textlock, but before the next queued key.
+          -- Share the queue across panes in case an earlier click changed focus.
+          pending_mouse[#pending_mouse + 1] = intent
+          return mouse_action
         end
         require("vigit.ui.controller").dispatch(session, intent)
       end, {
         buffer = buffer, desc = "Vigit: " .. entry.description, noremap = true, silent = true,
+        expr = entry.mouse == true,
       })
     end
   end
 end
 
 function M.apply(session)
-  apply_context(session, session.owned.diff_buf, "diff")
-  apply_context(session, session.owned.changes_buf, "changes")
+  local mouse_intents = {}
+  apply_context(session, session.owned.diff_buf, "diff", mouse_intents)
+  apply_context(session, session.owned.changes_buf, "changes", mouse_intents)
   local owned_autocmds = {}
   local function remember_autocmd(id)
     owned_autocmds[#owned_autocmds + 1] = id

@@ -32,6 +32,8 @@ local files = #arg > 0 and arg or {
   "tests/headless/workspace_lifecycle_spec.lua",
   "tests/headless/sessions_spec.lua",
   "tests/headless/syntax_spec.lua",
+  "tests/headless/scope_context_spec.lua",
+  "tests/headless/input_spec.lua",
   "tests/headless/handoff_spec.lua",
   "tests/headless/native_flow_spec.lua",
   "tests/headless/file_mutations_spec.lua",
@@ -50,8 +52,8 @@ end
 assert(#tests > 0, "headless test runner loaded zero tests")
 if using_default_files then
   assert(
-    #tests == 135,
-    string.format("expected 135 default headless tests, loaded %d", #tests)
+    #tests == 149,
+    string.format("expected 149 default headless tests, loaded %d", #tests)
   )
 end
 

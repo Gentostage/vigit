@@ -385,7 +385,11 @@ it("renders status before an explicitly selected diff and dispatches cursor sele
       return session.view.selected_change_id == "unstaged\0tracked.lua"
         and session.data.diffs[session.view.selected_change_id] ~= nil
     end, 10))
-    assert_truthy(find_line(session.owned.diff_buf, "@@"))
+    local added_row = assert(find_line(session.owned.diff_buf, "return 'new'"))
+    local target = assert(renderer.target_at(session.owned.diff_buf, added_row))
+    assert_equal(target.kind, "add")
+    assert_equal(target.source_anchor.source_line, 1)
+    assert_truthy(target.hunk_id)
 
     controller.dispatch(session, "activate")
     assert_equal(vim.api.nvim_get_current_win(), session.owned.diff_win)
@@ -647,17 +651,19 @@ it("returns file hit targets and marker-free view models", function()
   assert_truthy(changes.lines[changes.targets[1].row]:find("src/a.lua", 1, true))
 
   local diff = diff_view.render(state, 20)
-  local hunk_row
-  for row, line in ipairs(diff.lines) do
-    if line == "@@" then
-      hunk_row = row
+  local deletion_row
+  for row, model in ipairs(diff.rows) do
+    if model.kind == "delete" then
+      deletion_row = row
       break
     end
   end
-  assert_truthy(hunk_row)
-  assert_equal(diff.lines[hunk_row + 1], "return false")
-  assert_equal(diff.lines[hunk_row + 2], "return true")
-  assert_equal(diff.lines[hunk_row + 3], long_line)
+  assert_truthy(deletion_row)
+  assert_equal(diff.lines[deletion_row], "return false")
+  assert_equal(diff.lines[deletion_row + 1], "return true")
+  assert_equal(diff.lines[deletion_row + 2], long_line)
+  assert_truthy(diff.rows[deletion_row].hunk_id)
+  assert_equal(diff.rows[deletion_row].hunk_id, diff.rows[deletion_row + 1].hunk_id)
 end)
 
 it("renders every tree directory with semantic status and icon highlights", function()
@@ -1291,6 +1297,8 @@ it("publishes the basic normal-mode key registry", function()
     "<Tab>",
     "<C-w><Left>",
     "<C-w><Right>",
+    "<C-w><Up>",
+    "<C-w><Down>",
     "<CR>",
     "<LeftMouse>",
     "<2-LeftMouse>",

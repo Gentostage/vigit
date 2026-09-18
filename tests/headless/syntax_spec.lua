@@ -607,27 +607,27 @@ it("проходит captures sweep-ом и сохраняет multiline interse
   vim.api.nvim_buf_delete(buffer, { force = true })
 end)
 
-it("дополняет class-only hunk ближайшим изменённым методом", function()
+it("подписывает gap методом со скрытым объявлением", function()
   local namespace = vim.api.nvim_create_namespace("vigit-test-hunk-method-context")
   local buffer = vim.api.nvim_create_buf(false, true)
   local change_id = "unstaged\0service.py"
   local rendered = {
     lines = {
-      "@@ -8 +8 @@ class PaymentService:",
-      "  def validate(self):",
+      "… 8 unchanged lines …",
+      "    self.validate()",
     },
     rows = {
       {
-        text = "@@ -8 +8 @@ class PaymentService:",
-        kind = "hunk",
+        text = "… 8 unchanged lines …",
+        kind = "gap",
         change_id = change_id,
-        source_anchor = { side = "new", source_line = 8 },
+        source_anchor = { side = "new", source_line = 10 },
       },
       {
-        text = "  def validate(self):",
+        text = "    self.validate()",
         kind = "add",
         change_id = change_id,
-        source_anchor = { side = "new", source_line = 9 },
+        source_anchor = { side = "new", source_line = 10 },
       },
     },
   }
@@ -656,34 +656,34 @@ it("дополняет class-only hunk ближайшим изменённым �
     function(details)
       return details.virt_text
         and details.virt_text[1]
-        and details.virt_text[1][1] == " · validate()"
+        and details.virt_text[1][1] == " · PaymentService.validate()"
     end
   ))
   assert_equal(context.priority, highlights.priorities.symbol)
   vim.api.nvim_buf_delete(buffer, { force = true })
 end)
 
-it("берёт method context удалённого hunk из old snapshot", function()
+it("берёт hidden method context удалённого кода из old snapshot", function()
   local namespace = vim.api.nvim_create_namespace("vigit-test-deleted-hunk-method")
   local buffer = vim.api.nvim_create_buf(false, true)
   local change_id = "unstaged\0service.py"
   local rendered = {
     lines = {
-      "@@ -8 +8 @@ class PaymentService:",
-      "  def reject(self):",
+      "… 8 unchanged lines …",
+      "    self.reject()",
     },
     rows = {
       {
-        text = "@@ -8 +8 @@ class PaymentService:",
-        kind = "hunk",
+        text = "… 8 unchanged lines …",
+        kind = "gap",
         change_id = change_id,
-        source_anchor = { side = "old", source_line = 8 },
+        source_anchor = { side = "old", source_line = 10 },
       },
       {
-        text = "  def reject(self):",
+        text = "    self.reject()",
         kind = "delete",
         change_id = change_id,
-        source_anchor = { side = "old", source_line = 9 },
+        source_anchor = { side = "old", source_line = 10 },
       },
     },
   }
@@ -712,7 +712,7 @@ it("берёт method context удалённого hunk из old snapshot", func
     function(details)
       return details.virt_text
         and details.virt_text[1]
-        and details.virt_text[1][1] == " · reject()"
+        and details.virt_text[1][1] == " · PaymentService.reject()"
     end
   ))
   vim.api.nvim_buf_delete(buffer, { force = true })
@@ -790,37 +790,6 @@ it("labels only hidden declarations and discards stale scheduled inspection", fu
     buffer,
     namespace,
     2,
-    function(details)
-      return details.virt_text ~= nil
-    end
-  ), nil)
-
-  local hunk_context = {
-    lines = {
-      "… 3 unchanged lines …",
-      "@@ -4 +4 @@ class PaymentService:",
-    },
-    rows = {
-      {
-        text = "… 3 unchanged lines …",
-        kind = "gap",
-        change_id = change_id,
-        source_anchor = { side = "new", source_line = 4 },
-      },
-      {
-        text = "@@ -4 +4 @@ class PaymentService:",
-        kind = "hunk",
-        change_id = change_id,
-        source_anchor = { side = "new", source_line = 4 },
-      },
-    },
-  }
-  vim.api.nvim_buf_set_lines(buffer, 0, -1, false, hunk_context.lines)
-  highlights.apply_diff(buffer, hunk_context, inspections, namespace)
-  assert_equal(find_extmark(
-    buffer,
-    namespace,
-    1,
     function(details)
       return details.virt_text ~= nil
     end

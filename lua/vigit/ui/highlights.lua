@@ -350,25 +350,37 @@ end
 
 local function visible_source_rows(rendered)
   local visible = {}
+  local texts = {}
   for _, rendered_row in ipairs(rendered.rows or {}) do
-    local source_anchor = rendered_row.source_anchor
     if (rendered_row.kind == "add" or rendered_row.kind == "context")
-        and source_anchor
-        and source_anchor.side == "new"
-        and type(source_anchor.source_line) == "number" then
-      local rows = visible[rendered_row.change_id] or {}
-      rows[source_anchor.source_line - 1] = true
+        or rendered_row.kind == "delete" then
+      local rows = visible[rendered_row.change_id] or { old = {}, new = {} }
+      for _, side in ipairs({ "old", "new" }) do
+        local source_line = rendered_row[side .. "_line"]
+        local source_anchor = rendered_row.source_anchor
+        if source_line == nil and source_anchor and source_anchor.side == side then
+          source_line = source_anchor.source_line
+        end
+        if type(source_line) == "number" then
+          rows[side][source_line - 1] = true
+        end
+      end
       visible[rendered_row.change_id] = rows
+      local file_texts = texts[rendered_row.change_id] or {}
+      file_texts[#file_texts + 1] = vim.trim(rendered_row.text or "")
+      texts[rendered_row.change_id] = file_texts
     end
   end
-  return visible
+  return visible, texts
 end
 
-local function symbol_at(symbols, source_row)
+local function matching_symbol(symbols, source_row, wanted)
   local best
   local best_span
   for _, symbol in ipairs(symbols or {}) do
-    if source_row >= symbol.start_row and source_row <= symbol.end_row then
+    if type(source_row) == "number"
+        and source_row >= symbol.start_row and source_row <= symbol.end_row
+        and (not wanted or symbol.kind == wanted.kind and symbol.label == wanted.label) then
       local span = symbol.end_row - symbol.start_row
       if best == nil
           or span < best_span
@@ -381,123 +393,108 @@ local function symbol_at(symbols, source_row)
   return best
 end
 
-local function first_changed_method(rendered, hunk_row, inspections)
-  local rows = rendered.rows or {}
-  local hunk = rows[hunk_row]
-  local file = hunk and inspections[hunk.change_id]
-  if not hunk or not file then return nil end
-
-  local function find(kind, side)
-    local inspection = file[side]
-    if not inspection then return nil end
-    for row = hunk_row + 1, #rows do
-      local candidate = rows[row]
-      if candidate.change_id ~= hunk.change_id
-          or candidate.kind == "hunk"
-          or candidate.kind == "file_header" then
-        break
-      end
-      local source_anchor = candidate.source_anchor
-      if candidate.kind == kind
-          and source_anchor
-          and source_anchor.side == side
-          and type(source_anchor.source_line) == "number" then
-        local symbol = symbol_at(
-          inspection.symbols,
-          source_anchor.source_line - 1
-        )
-        if symbol and symbol.kind == "method" then return symbol end
+local function hidden_symbol(inspection, source_row, visible, opposite, opposite_row)
+  local hidden = {}
+  for _, symbol in ipairs(inspection.symbols or {}) do
+    if source_row >= symbol.start_row and source_row <= symbol.end_row
+        and not (visible.current or {})[symbol.declaration_row] then
+      local counterpart = opposite and matching_symbol(opposite.symbols, opposite_row, symbol)
+      if not (counterpart and (visible.opposite or {})[counterpart.declaration_row]) then
+        hidden[#hidden + 1] = symbol
       end
     end
   end
-
-  return find("add", "new") or find("delete", "old")
+  local symbol = matching_symbol(hidden, source_row)
+  local counterpart = symbol and opposite and matching_symbol(opposite.symbols, opposite_row, symbol)
+  return symbol, counterpart
 end
 
-local function class_method_context(header, symbol)
-  if not symbol or symbol.kind ~= "method" or not symbol.name then return nil end
-  if header:find(symbol.name, 1, true) then return nil end
-  local owner = symbol.label and symbol.label:match("^(.+)%.[^.]+%(%)$")
-  if not owner or not header:find(owner, 1, true) then return nil end
-  return symbol.name .. "()"
+local function symbol_key(side, symbol, counterpart)
+  -- Pair old/new scope through the hunk's two source coordinates, not its name alone.
+  if side == "old" and counterpart then
+    side, symbol = "new", counterpart
+  end
+  return side .. ":" .. tostring(symbol.declaration_row) .. ":" .. tostring(symbol.label)
 end
 
-local function hunk_describes_symbol(rendered, gap_row, symbol)
-  local hunk = rendered.rows and rendered.rows[gap_row + 1]
-  if not hunk
-      or hunk.kind ~= "hunk"
-      or hunk.change_id ~= rendered.rows[gap_row].change_id then
-    return false
-  end
+local function add_symbol_context(buffer, namespace, row, label)
+  vim.api.nvim_buf_set_extmark(buffer, namespace, row - 1, 0, {
+    virt_text = { { " · " .. label, "VigitSymbolContext" } },
+    virt_text_pos = "eol",
+    hl_mode = "combine",
+    priority = M.priorities.symbol,
+    strict = false,
+  })
+end
 
-  local text = hunk.text or ""
-  if symbol.name and text:find(symbol.name, 1, true) then
-    return true
+local function declaration_text_visible(context, texts)
+  context = vim.trim(context)
+  for _, text in ipairs(texts or {}) do
+    if text:sub(1, #context) == context then return true end
   end
-
-  local owner = symbol.label
-      and symbol.label:match("^(.+)%.[^.]+%(%)$")
-    or nil
-  return owner ~= nil and text:find(owner, 1, true) ~= nil
+  return false
 end
 
 local function add_symbol_layers(buffer, rendered, inspections, namespace)
-  local visible = visible_source_rows(rendered)
+  local visible, texts = visible_source_rows(rendered)
+  local seen = {}
   for buffer_row, rendered_row in ipairs(rendered.rows or {}) do
     local source_anchor = rendered_row.source_anchor
     local file = inspections[rendered_row.change_id]
-    local inspection = file and file.new
-    if rendered_row.kind == "hunk" then
-      local context = class_method_context(
-        rendered_row.text or "",
-        first_changed_method(rendered, buffer_row, inspections)
-      )
-      if context then
-        vim.api.nvim_buf_set_extmark(
-          buffer,
-          namespace,
-          buffer_row - 1,
-          0,
-          {
-            virt_text = {
-              { " · " .. context, "VigitSymbolContext" },
-            },
-            virt_text_pos = "eol",
-            hl_mode = "combine",
-            priority = M.priorities.symbol,
-            strict = false,
-          }
-        )
-      end
-    elseif rendered_row.kind == "gap"
+    if rendered_row.kind == "gap"
         and source_anchor
-        and source_anchor.side == "new"
-        and type(source_anchor.source_line) == "number"
-        and inspection then
-      local symbol = symbol_at(
-        inspection.symbols,
-        source_anchor.source_line - 1
-      )
+        and type(source_anchor.source_line) == "number" then
+      local side = source_anchor.side
+      local opposite_side = side == "old" and "new" or "old"
+      local inspection = file and file[side]
+      local opposite = file and file[opposite_side]
+      local opposite_line = rendered_row[opposite_side .. "_line"]
+      local opposite_row = opposite_line and opposite_line - 1
+      local source_row = source_anchor.source_line - 1
       local visible_rows = visible[rendered_row.change_id] or {}
-      if symbol
-          and symbol.label
-          and not visible_rows[symbol.declaration_row]
-          and not hunk_describes_symbol(rendered, buffer_row, symbol) then
-        vim.api.nvim_buf_set_extmark(
-          buffer,
-          namespace,
-          buffer_row - 1,
-          0,
-          {
-            virt_text = {
-              { " · " .. symbol.label, "VigitSymbolContext" },
-            },
-            virt_text_pos = "eol",
-            hl_mode = "combine",
-            priority = M.priorities.symbol,
-            strict = false,
-          }
+      local file_seen = seen[rendered_row.change_id] or {}
+      seen[rendered_row.change_id] = file_seen
+      if inspection and (#(inspection.symbols or {}) > 0
+          or opposite and #(opposite.symbols or {}) > 0) then
+        local symbol, counterpart = hidden_symbol(
+          inspection, source_row,
+          { current = visible_rows[side], opposite = visible_rows[opposite_side] },
+          opposite, opposite_row
         )
+        if not symbol and opposite and opposite_row then
+          symbol, counterpart = hidden_symbol(
+            opposite, opposite_row,
+            { current = visible_rows[opposite_side], opposite = visible_rows[side] },
+            inspection, source_row
+          )
+          if symbol then
+            side, inspection, opposite = opposite_side, opposite, inspection
+            source_row, opposite_row = opposite_row, source_row
+          end
+        end
+        if symbol and symbol.label then
+          local key = symbol_key(side, symbol, counterpart)
+          if not file_seen[key] then
+            add_symbol_context(buffer, namespace, buffer_row, symbol.label)
+            file_seen[key] = true
+            for _, owner in ipairs(inspection.symbols or {}) do
+              if owner.kind == "class" and owner.name
+                  and source_row >= owner.start_row and source_row <= owner.end_row
+                  and symbol.label:sub(1, #owner.name + 1) == owner.name .. "." then
+                local other_owner = opposite and matching_symbol(opposite.symbols, opposite_row, owner)
+                file_seen[symbol_key(side, owner, other_owner)] = true
+              end
+            end
+          end
+        end
+      elseif rendered_row.scope_context then
+        local context = rendered_row.scope_context
+        local key = "git:" .. context
+        if not file_seen[key]
+            and not declaration_text_visible(context, texts[rendered_row.change_id]) then
+          add_symbol_context(buffer, namespace, buffer_row, context)
+          file_seen[key] = true
+        end
       end
     end
   end

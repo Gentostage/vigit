@@ -274,8 +274,7 @@ it("hides technical Git patch headers from the review surface", function()
     assert_equal(text:find("+++ b/src/a.lua", 1, true), nil)
     assert_equal(rendered.lines[1], "[UNSTAGED] src/a.lua")
     assert_equal(text:find("@@ -1,3 +1,3 @@", 1, true), nil)
-    local _, hunk = find_row(rendered, "hunk")
-    assert_equal(hunk.text, "@@")
+    assert_equal(find_row(rendered, "hunk"), nil)
     assert_equal(parsed.headers[1], "diff --git a/src/a.lua b/src/a.lua")
   end)
 end)
@@ -293,13 +292,48 @@ it("скрывает координаты hunk и сохраняет исход�
     })
 
     local rendered = diff_view.render(state_with(parsed), 100)
-    local _, hunk = find_row(rendered, "hunk")
-
-    assert_equal(hunk.text, "class AdjustmentRejectCommand:")
+    assert_equal(find_row(rendered, "hunk"), nil)
+    assert_equal(table.concat(rendered.lines, "\n"):find(
+      "class AdjustmentRejectCommand:", 1, true
+    ), nil)
     assert_equal(
       parsed.hunks[1].header,
       "@@ -46,7 +46,13 @@ class AdjustmentRejectCommand:"
     )
+  end)
+end)
+
+it("не повторяет видимое объявление функции перед следующими hunk", function()
+  with_vim(function()
+    local parsed = parse_patch({
+      "@@ -1,3 +1,3 @@ def build_topic_generation_messages(",
+      " def build_topic_generation_messages(",
+      "-    old",
+      "+    new",
+      "     result",
+      "@@ -10 +10 @@ def build_topic_generation_messages(",
+      "-old tail",
+      "+new tail",
+      "",
+    })
+    local original_patch = parsed.patch
+    local rendered = diff_view.render(state_with(parsed), 100)
+    local declarations = 0
+    local changed_hunks = {}
+    for _, row in ipairs(rendered.rows) do
+      if row.text == "def build_topic_generation_messages(" then
+        declarations = declarations + 1
+        assert_equal(row.kind, "context")
+      end
+      if row.kind == "add" then
+        changed_hunks[row.hunk_id] = true
+        assert_equal(row.source_anchor.side, "new")
+      end
+    end
+    assert_equal(declarations, 1)
+    assert_truthy(changed_hunks[change.id .. "\0logical:2:2"])
+    assert_truthy(changed_hunks[change.id .. "\0logical:10:10"])
+    assert_equal(parsed.patch, original_patch)
   end)
 end)
 

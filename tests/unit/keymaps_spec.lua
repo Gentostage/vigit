@@ -82,12 +82,12 @@ it("документирует русские aliases для оконной на
   local markdown = keymaps.render_markdown()
 
   assert_truthy(markdown:find(
-    "`<C-w><Left> / <C-ц><Left>`",
+    "`<C-w><Left> / <C-ц><Left> / <C-w>h",
     1,
     true
   ) ~= nil)
   assert_truthy(markdown:find(
-    "`<C-w><Right> / <C-ц><Right>`",
+    "`<C-w><Right> / <C-ц><Right> / <C-w>l",
     1,
     true
   ) ~= nil)

@@ -71,6 +71,9 @@ local function add_line(output, line, group, truncate, metadata)
     section = metadata.section,
     side = metadata.side,
     source_line = metadata.source_line,
+    old_line = metadata.old_line,
+    new_line = metadata.new_line,
+    scope_context = metadata.scope_context,
     source_anchor = anchor.from_row(metadata, 0),
   }
   output.rows[#output.rows + 1] = rendered_row
@@ -177,11 +180,19 @@ local function typed_error(error)
   return "Error: " .. message
 end
 
-local function display_hunk_header(header)
+local function hunk_context(header)
   local context = tostring(header or ""):match("^@@ .- @@%s*(.*)$")
-  if context == nil then return tostring(header or "") end
-  if context == "" then return "@@" end
-  return context
+  if context and context ~= "" then return escape_control(context) end
+end
+
+local function hunk_side(hunk)
+  for _, line in ipairs(hunk.lines or {}) do
+    if line.kind == "add" then return "new" end
+  end
+  for _, line in ipairs(hunk.lines or {}) do
+    if line.kind == "delete" then return "old" end
+  end
+  return hunk.new_count == 0 and "old" or "new"
 end
 
 local function render_file(output, change, diff, loading, file_error)
@@ -286,6 +297,8 @@ local function render_file(output, change, diff, loading, file_error)
   for _, model in ipairs(hunk_models) do
     local hunk = model.hunk
     local first_cluster = model.clusters[1]
+    local side = hunk_side(hunk)
+    local source_line = side == "old" and hunk.old_start or hunk.new_start
     local hidden_lines = gap_size(previous_hunk, hunk)
     if hidden_lines > 0 then
       add_line(
@@ -294,26 +307,16 @@ local function render_file(output, change, diff, loading, file_error)
         "Comment",
         nil,
         row_metadata(change, diff, "gap", {
-          side = "new",
-          source_line = hunk.new_start,
+          side = side,
+          source_line = source_line,
+          old_line = hunk.old_start,
+          new_line = hunk.new_start,
+          scope_context = hunk_context(hunk.header),
           hunk_id = first_cluster.key,
         })
       )
     end
 
-    local hunk_side = hunk.new_count == 0 and "old" or "new"
-    local hunk_line = hunk_side == "old" and hunk.old_start or hunk.new_start
-    add_line(
-      output,
-      escape_control(display_hunk_header(hunk.header)),
-      "DiffText",
-      nil,
-      row_metadata(change, diff, "hunk", {
-        side = hunk_side,
-        source_line = hunk_line,
-        hunk_id = first_cluster.key,
-      })
-    )
     for index, line in ipairs(hunk.lines or {}) do
       local cluster = anchor.cluster_for_index(model.clusters, index)
       local source = source_for_line(line)

@@ -294,13 +294,19 @@ function M.toggle_changes(session)
 end
 
 function M.focus_direction(session, direction)
-  if session.closed or not M.is_visible(session) then
+  if session.closed or not M.is_visible(session)
+      or (direction ~= "left" and direction ~= "right") then
     return
   end
 
   local changes_on_left = config.get().ui.changes_side == "left"
   local focus_changes = direction == "left" and changes_on_left
     or direction == "right" and not changes_on_left
+  local target = focus_changes and session.owned.changes_win or session.owned.diff_win
+  if target ~= vim.api.nvim_get_current_win()
+      and vim.fn.mode():match("^[vV\22]") then
+    vim.cmd.normal({ vim.keycode("<Esc>"), bang = true })
+  end
   if focus_changes then
     if not valid_window(session.owned.changes_win) then
       M.toggle_changes(session)
