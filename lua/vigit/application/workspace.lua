@@ -16,7 +16,6 @@ function M.new(opts)
   opts = opts or {}
   return setmetatable({
     canonicalize = assert(opts.canonicalize),
-    inspect = assert(opts.inspect),
     set_root = assert(opts.set_root),
     create_session = assert(opts.create_session),
     mount = assert(opts.mount),
@@ -197,15 +196,6 @@ function Workspace:switch(root)
     return self:show_review()
   end
 
-  local inspected = valid_result(
-    self.inspect(self),
-    "workspace_inspection_failed",
-    "Unable to inspect workspace resources"
-  )
-  if not inspected.ok then
-    return inspected
-  end
-
   local previous = self.session
   self.hide(previous)
   self.session = nil
@@ -219,18 +209,17 @@ function Workspace:switch(root)
   return self:_restore(previous, activated)
 end
 
-function Workspace:remove_session(root)
+function Workspace:close_session(root)
   root = self.canonicalize(root)
-  if self.root == root then
-    return false
-  end
   local session = self.sessions[root]
-  if not session then
-    return false
+  if not session or session.closed then return false end
+  if self.session == session then
+    self.hide(session)
+    self.session = nil
+    self.root = nil
+    self.mode = "code"
   end
-  if not session.closed then
-    self.dispose(session)
-  end
+  self.dispose(session)
   self.sessions[root] = nil
   for index, candidate in ipairs(self.session_order) do
     if candidate == root then

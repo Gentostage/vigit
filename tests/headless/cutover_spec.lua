@@ -29,6 +29,8 @@ it("cuts every public command over once to the shared v2 lifecycle", function()
   local repo = Fixture.new()
   local session
   local calls = {}
+  local worktree_context
+  local open_worktrees = function(context) worktree_context = context end
   local original_create_user_command = vim.api.nvim_create_user_command
   local ok, message = xpcall(function()
     vim.api.nvim_create_user_command = function(name, callback, opts)
@@ -37,11 +39,11 @@ it("cuts every public command over once to the shared v2 lifecycle", function()
     end
 
     local plugin = require("vigit")
-    assert_equal(plugin.setup({ refresh = {
+    assert_equal(plugin.setup({ handlers = { open_worktrees = open_worktrees }, refresh = {
       debounce_ms = 25,
       poll_interval_ms = 0,
     } }), true)
-    assert_equal(plugin.setup({ refresh = {
+    assert_equal(plugin.setup({ handlers = { open_worktrees = open_worktrees }, refresh = {
       debounce_ms = 25,
       poll_interval_ms = 0,
     } }), true)
@@ -77,8 +79,7 @@ it("cuts every public command over once to the shared v2 lifecycle", function()
     end, 10))
 
     vim.cmd("VigitWorktrees")
-    assert_equal(vim.bo[0].filetype, "vigit-worktrees")
-    vim.api.nvim_feedkeys("q", "x", false)
+    assert_truthy(vim.deep_equal(worktree_context, { root = session.root, mode = "review" }))
 
     vim.cmd("VigitHelp")
     assert_equal(vim.bo[0].filetype, "vigit-help")
@@ -86,6 +87,7 @@ it("cuts every public command over once to the shared v2 lifecycle", function()
   end, debug.traceback)
 
   vim.api.nvim_create_user_command = original_create_user_command
+  require("vigit.config").setup(nil)
   close_session(session)
   repo:cleanup()
   if not ok then error(message, 0) end

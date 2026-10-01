@@ -11,9 +11,9 @@ inspect → correct → comment → handoff агенту.
 Public API находится в `lua/vigit/init.lua`; `lua/vigit/v2.lua` — временный
 compatibility alias без отдельного state. Код разделён по слоям:
 
-- `lua/vigit/core/` — чистые модели status, diff, patch, review и worktree;
+- `lua/vigit/core/` — чистые модели status, diff, patch и review;
 - `lua/vigit/application/` — orchestration changes, mutations, comments и
-  worktrees;
+  review workspace;
 - `lua/vigit/adapters/` — Git CLI, Neovim, filesystem, process и TreeSitter;
 - `lua/vigit/ui/` — session registry, controller, renderer, layout и views.
 
@@ -43,9 +43,16 @@ UI mutations — controller/renderer.
 
 Source и terminal buffers принадлежат пользователю. Vigit не добавляет в них
 свои mappings, options, winbar или lifecycle autocmds. Source buffers и обычные
-terminal buffers не закрываются; точный Vigit terminal можно остановить только
-после явного `y/N` при переключении worktree.
-Каждый canonical worktree имеет независимую Vigit session.
+terminal buffers не закрываются при смене review root.
+Каждый canonical root имеет независимую Vigit session. Vigit привязывает cwd
+только к review tab, сохраняя global cwd и пользовательские window-local cwd.
+Выбор и управление worktree принадлежат внешнему менеджеру из Neovim config.
+`handlers.open_worktrees({ root, mode })` получает только canonical root и
+режим `review` или `code`; Vigit не импортирует пользовательские `custom.*` modules.
+Host проверяет review lifecycle через чистый `can_close({ cwd = root })` перед
+удалением root и освобождает matching session через `close({ cwd = root })`
+после успеха. Active mutation и несохранённый Vigit comment editor защищаются
+общими guards этих API.
 
 ## Тестирование и PR
 

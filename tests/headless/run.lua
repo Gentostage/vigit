@@ -31,6 +31,7 @@ local files = #arg > 0 and arg or {
   "tests/headless/cutover_spec.lua",
   "tests/headless/workspace_lifecycle_spec.lua",
   "tests/headless/sessions_spec.lua",
+  "tests/headless/close_spec.lua",
   "tests/headless/syntax_spec.lua",
   "tests/headless/scope_context_spec.lua",
   "tests/headless/input_spec.lua",
@@ -41,8 +42,7 @@ local files = #arg > 0 and arg or {
   "tests/headless/rollback_spec.lua",
   "tests/headless/comments_spec.lua",
   "tests/headless/confirm_spec.lua",
-  "tests/headless/worktrees_spec.lua",
-  "tests/headless/worktree_remove_spec.lua",
+  "tests/headless/worktrees_handler_spec.lua",
   "tests/headless/observers_spec.lua",
 }
 for _, file in ipairs(files) do
@@ -52,8 +52,8 @@ end
 assert(#tests > 0, "headless test runner loaded zero tests")
 if using_default_files then
   assert(
-    #tests == 149,
-    string.format("expected 149 default headless tests, loaded %d", #tests)
+    #tests == 150,
+    string.format("expected 150 default headless tests, loaded %d", #tests)
   )
 end
 

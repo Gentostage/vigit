@@ -1,5 +1,18 @@
 local config = require("vigit.config")
 
+it("валидирует optional handler внешнего менеджера worktree", function()
+  local handler = function() end
+  local configured = config.resolve({ handlers = { open_worktrees = handler } })
+  assert_truthy(configured.ok)
+  assert_equal(configured.value.handlers.open_worktrees, handler)
+  assert_equal(config.resolve({ handlers = { open_worktrees = false } }).ok, true)
+  for _, value in ipairs({ true, "picker", {} }) do
+    local rejected = config.resolve({ handlers = { open_worktrees = value } })
+    assert_equal(rejected.ok, false)
+    assert_truthy(rejected.error.message:find("handlers.open_worktrees", 1, true))
+  end
+end)
+
 it("deep merges supported options", function()
   local result = config.resolve({
     ui = { changes_width = 28 },

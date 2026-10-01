@@ -122,7 +122,7 @@ it("keeps independent sessions as overlays in one workspace tab", function()
     local again = assert(v2.open({ cwd = repo_a.root .. "/" }))
     assert_equal(again.id, a.id)
     assert_equal(vim.api.nvim_get_current_tabpage(), a.owned.tab)
-    assert_equal(vim.fn.getcwd(-1, -1), a.root)
+    assert_equal(vim.fn.getcwd(-1, 0), a.root)
     assert_equal(vim.fn.getcwd(0, 0), a.root)
     assert_equal(b.owned.diff_win, nil)
     assert_equal(b.owned.changes_win, nil)
@@ -156,7 +156,7 @@ it("keeps independent sessions as overlays in one workspace tab", function()
     assert_equal(a.closed, false)
     assert_truthy(vim.api.nvim_tabpage_is_valid(a.owned.tab))
     assert_equal(b.closed, false)
-    assert_equal(vim.fn.getcwd(-1, -1), a.root)
+    assert_equal(vim.fn.getcwd(-1, 0), a.root)
   end, debug.traceback)
 
   for _, session in ipairs(sessions) do
@@ -1327,14 +1327,6 @@ it("publishes the basic normal-mode key registry", function()
     "<Esc>",
     "q",
     "W",
-    "<CR>",
-    "[w",
-    "]w",
-    "r",
-    "F",
-    "d",
-    "D",
-    "q",
     "]h",
     "[h",
     "?",

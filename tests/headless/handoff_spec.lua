@@ -115,7 +115,7 @@ it("hands identical relative paths to distinct buffers in one workspace tab", fu
   local sessions = {}
   local source_tabs = {}
   local source_buffers = {}
-  local extra_buffers = {}
+  local original_global_cwd = vim.fn.getcwd(-1, -1)
   local ok, message = xpcall(function()
     prepare_repo(repo_a, {
       ["src/service.py"] = {
@@ -187,7 +187,7 @@ it("hands identical relative paths to distinct buffers in one workspace tab", fu
     assert_equal(tab_var(tab_a, "vigit_role"), "workspace")
     assert_equal(tab_var(tab_b, "vigit_role"), "workspace")
     assert_equal(tab_cwd(tab_b), session_b.root)
-    assert_equal(vim.fn.getcwd(-1, -1), session_b.root)
+    assert_equal(vim.fn.getcwd(-1, -1), original_global_cwd)
     assert_truthy(tab_var(tab_b, "vigit_label"):find("service.py", 1, true))
     assert_equal(session_a.owned.tab, tab_a)
     assert_equal(session_b.owned.tab, tab_b)
@@ -224,28 +224,13 @@ it("hands identical relative paths to distinct buffers in one workspace tab", fu
     assert_equal(previous_source[1], target_a.source_line)
     assert_equal(previous_source[2], 3)
 
-    local unloaded = vim.fn.bufadd(repo_a.root .. "/src/unloaded.py")
-    local nofile = vim.api.nvim_create_buf(false, true)
-    vim.api.nvim_buf_set_name(nofile, repo_a.root .. "/src/not-source.py")
-    vim.bo[nofile].buftype = "nofile"
-    extra_buffers = { unloaded, nofile }
-    local loaded = neovim.loaded_source_buffers(session_a.root)
-    assert_truthy(loaded.ok)
-    assert_equal(#loaded.value, 2)
-    assert_equal(loaded.value[1].path, assert(vim.uv.fs_realpath(
-      repo_a.root .. "/src/other.py"
-    )))
-    assert_equal(loaded.value[2].path, assert(vim.uv.fs_realpath(
-      repo_a.root .. "/src/service.py"
-    )))
-
     controller.dispatch(session_a, "close")
     assert_equal(session_a.closed, false)
     assert_equal(vim.api.nvim_tabpage_is_valid(tab_a), true)
     assert_equal(vim.api.nvim_tabpage_is_valid(tab_b), true)
     assert_equal(vim.api.nvim_buf_is_valid(buf_a), true)
     assert_equal(vim.api.nvim_buf_is_valid(buf_b), true)
-    assert_equal(vim.fn.getcwd(-1, -1), session_a.root)
+    assert_equal(vim.fn.getcwd(-1, -1), original_global_cwd)
     local cursor_a = vim.api.nvim_win_get_cursor(vim.fn.bufwinid(other_buf))
     assert_equal(cursor_a[1], target_other.source_line)
     assert_equal(cursor_a[2], 2)
@@ -255,9 +240,6 @@ it("hands identical relative paths to distinct buffers in one workspace tab", fu
     close_session(session)
   end
   for _, buffer in ipairs(source_buffers) do
-    delete_buffer(buffer)
-  end
-  for _, buffer in ipairs(extra_buffers) do
     delete_buffer(buffer)
   end
   repo_a:cleanup()
@@ -312,139 +294,6 @@ it("does not inject Vigit lifecycle into a handed-off source buffer", function()
   close_tab(source_tab)
   delete_buffer(source_buffer)
   repo:cleanup()
-  if not ok then
-    error(message, 0)
-  end
-end)
-
-it("filters loaded source buffers by canonical path components", function()
-  local repo = Fixture.new()
-  local sibling = repo.root .. "-sibling"
-  local outside = vim.fn.tempname()
-  local buffers = {}
-  local ok, message = xpcall(function()
-    local control_path = repo.root .. "/inside\ncontrol.lua"
-    local aliased_path = repo.root .. "/inside-via-external-alias.lua"
-    vim.fn.writefile({ "inside" }, control_path)
-    vim.fn.writefile({ "aliased" }, aliased_path)
-    vim.fn.mkdir(sibling, "p")
-    vim.fn.writefile({ "sibling" }, sibling .. "/file.lua")
-    vim.fn.mkdir(outside, "p")
-    vim.fn.writefile({ "outside" }, outside .. "/file.lua")
-    repo:symlink(outside .. "/file.lua", "outside-link.lua")
-    vim.fn.system({ "ln", "-s", "--", aliased_path, outside .. "/inside-alias.lua" })
-    assert_equal(vim.v.shell_error, 0)
-
-    for _, path in ipairs({
-      control_path,
-      sibling .. "/file.lua",
-      repo.root .. "/outside-link.lua",
-      outside .. "/inside-alias.lua",
-    }) do
-      local buffer = vim.fn.bufadd(path)
-      vim.fn.bufload(buffer)
-      buffers[#buffers + 1] = buffer
-    end
-
-    local loaded = neovim.loaded_source_buffers(repo.root)
-    assert_truthy(loaded.ok)
-    assert_equal(#loaded.value, 2)
-    assert_equal(loaded.value[1].buf, buffers[1])
-    assert_equal(loaded.value[1].path, assert(vim.uv.fs_realpath(control_path)))
-    assert_equal(loaded.value[2].buf, buffers[4])
-    assert_equal(loaded.value[2].path, assert(vim.uv.fs_realpath(aliased_path)))
-  end, debug.traceback)
-
-  for _, buffer in ipairs(buffers) do
-    delete_buffer(buffer)
-  end
-  vim.fn.delete(sibling, "rf")
-  vim.fn.delete(outside, "rf")
-  repo:cleanup()
-  if not ok then
-    error(message, 0)
-  end
-end)
-
-it("ignores missing external Windows UNC source buffers but fails closed inside target", function()
-  local original_package_config = package.config
-  local original_adapter = package.loaded["vigit.adapters.neovim"]
-  local original_realpath = vim.uv.fs_realpath
-  local original_lstat = vim.uv.fs_lstat
-  local original_buf_get_name = vim.api.nvim_buf_get_name
-  local buffers = {}
-  local ok, message = xpcall(function()
-    local root = "\\\\server\\share\\repo"
-    local external_backslash = "\\\\server\\share\\outside\\missing.py"
-    local external_slash = "//server/share/outside/missing.py"
-    local inside = "\\\\server\\share\\repo\\missing.py"
-    local inside_slash = "//server/share/repo/missing.py"
-    local missing = {
-      [external_backslash] = true,
-      [external_slash] = true,
-      [inside] = true,
-      [inside_slash] = true,
-    }
-    local names = {}
-
-    package.config = "\\\\\n;\n?\n!\n-\n"
-    package.loaded["vigit.adapters.neovim"] = nil
-    local windows_neovim = require("vigit.adapters.neovim")
-    vim.uv.fs_realpath = function(path)
-      if path == root then
-        return root
-      end
-      if missing[path] then
-        return nil
-      end
-      return original_realpath(path)
-    end
-    vim.uv.fs_lstat = function(path)
-      if missing[path] then
-        return nil, nil, "ENOENT"
-      end
-      return original_lstat(path)
-    end
-    vim.api.nvim_buf_get_name = function(buffer)
-      return names[buffer] or original_buf_get_name(buffer)
-    end
-
-    for _, path in ipairs({
-      external_backslash,
-      external_slash,
-      inside,
-      inside_slash,
-    }) do
-      local buffer = vim.api.nvim_create_buf(true, false)
-      names[buffer] = path
-      buffers[#buffers + 1] = buffer
-    end
-
-    local blocked = windows_neovim.loaded_source_buffers(root)
-    assert_equal(blocked.ok, false)
-    assert_equal(blocked.error.code, "source_buffer_unavailable")
-
-    delete_buffer(buffers[3])
-    buffers[3] = nil
-    local still_blocked = windows_neovim.loaded_source_buffers(root)
-    assert_equal(still_blocked.ok, false)
-    assert_equal(still_blocked.error.code, "source_buffer_unavailable")
-
-    delete_buffer(buffers[4])
-    buffers[4] = nil
-    local ignored = windows_neovim.loaded_source_buffers(root)
-    assert_truthy(ignored.ok)
-    assert_equal(#ignored.value, 0)
-  end, debug.traceback)
-
-  vim.uv.fs_realpath = original_realpath
-  vim.uv.fs_lstat = original_lstat
-  vim.api.nvim_buf_get_name = original_buf_get_name
-  package.config = original_package_config
-  package.loaded["vigit.adapters.neovim"] = original_adapter
-  for _, buffer in ipairs(buffers) do
-    delete_buffer(buffer)
-  end
   if not ok then
     error(message, 0)
   end
@@ -1072,7 +921,7 @@ it("opens a user-owned terminal split rooted at the current worktree", function(
     assert_equal(terminal_tab, session.owned.tab)
     assert_equal(tab_var(terminal_tab, "vigit_role"), "workspace")
     assert_truthy(tab_var(terminal_tab, "vigit_label"):find("TERM", 1, true))
-    assert_equal(vim.fn.getcwd(-1, -1), session.root)
+    assert_equal(vim.fn.getcwd(-1, -1), original_global_cwd)
     assert_equal(vim.fn.getcwd(0, 0), session.root)
     for _, mapping in ipairs(vim.api.nvim_buf_get_keymap(
       terminal_buffer,

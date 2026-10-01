@@ -1,11 +1,7 @@
 local M = {}
 
 local hint_labels = {
-  ["worktrees.select"] = "open", ["worktrees.previous"] = "prev",
-  ["worktrees.next"] = "next", ["worktrees.refresh"] = "refresh",
-  ["worktrees.fetch"] = "fetch", ["worktrees.remove"] = "remove",
-  ["worktrees.force_remove"] = "force",
-  ["worktrees.close"] = "close", ["comments.jump"] = "jump",
+  ["comments.jump"] = "jump",
   ["comments.edit"] = "edit", ["comments.delete"] = "delete",
   ["comments.close"] = "close", ["help.close"] = "close",
   ["help.escape"] = "close", ["help.open"] = "help",
@@ -44,18 +40,10 @@ local entries = {
   { id = "comment_editor.close", modes = { "n" }, lhs = "q", contexts = { "comment_editor" }, group = "lifecycle", description = "Close comment editor", intent = "close" },
   { id = "comment_editor.escape", modes = { "n" }, lhs = "<Esc>", contexts = { "comment_editor" }, group = "lifecycle", description = "Close comment editor", intent = "close" },
   { id = "session.close", modes = { "n" }, lhs = "q", contexts = { "diff", "changes" }, group = "lifecycle", description = "Return to code mode", intent = "close" },
-  { id = "worktrees.open", modes = { "n" }, lhs = "W", contexts = { "diff", "changes", "comments", "prompt", "comment_editor" }, group = "worktrees", description = "Open worktree picker", intent = "open_worktrees" },
-  { id = "worktrees.select", modes = { "n" }, lhs = "<CR>", contexts = { "worktrees" }, group = "worktrees", description = "Open selected worktree", intent = "select_worktree" },
-  { id = "worktrees.previous", modes = { "n" }, lhs = "[w", contexts = { "worktrees" }, group = "worktrees", description = "Previous worktree", intent = "previous_worktree" },
-  { id = "worktrees.next", modes = { "n" }, lhs = "]w", contexts = { "worktrees" }, group = "worktrees", description = "Next worktree", intent = "next_worktree" },
-  { id = "worktrees.refresh", modes = { "n" }, lhs = "r", contexts = { "worktrees" }, group = "worktrees", description = "Refresh worktrees", intent = "refresh_worktrees" },
-  { id = "worktrees.fetch", modes = { "n" }, lhs = "F", contexts = { "worktrees" }, group = "worktrees", description = "Fetch selected worktree", intent = "fetch_worktree" },
-  { id = "worktrees.remove", modes = { "n" }, lhs = "d", contexts = { "worktrees" }, group = "worktrees", description = "Remove selected worktree safely", intent = "remove_worktree" },
-  { id = "worktrees.force_remove", modes = { "n" }, lhs = "D", contexts = { "worktrees" }, group = "worktrees", description = "Force-remove dirty worktree (y/N)", intent = "force_remove_worktree" },
-  { id = "worktrees.close", modes = { "n" }, lhs = "q", contexts = { "worktrees" }, group = "lifecycle", description = "Close worktree picker", intent = "close" },
+  { id = "worktrees.open", modes = { "n" }, lhs = "W", contexts = { "diff", "changes", "comments", "prompt", "comment_editor" }, group = "worktrees", description = "Open external worktree manager", intent = "open_worktrees" },
   { id = "hunk.next", modes = { "n" }, lhs = "]h", contexts = { "diff" }, group = "navigation", description = "Select next hunk", intent = "next_hunk" },
   { id = "hunk.previous", modes = { "n" }, lhs = "[h", contexts = { "diff" }, group = "navigation", description = "Select previous hunk", intent = "previous_hunk" },
-  { id = "help.open", modes = { "n" }, lhs = "?", contexts = { "diff", "changes", "comments", "prompt", "comment_editor", "worktrees" }, group = "lifecycle", description = "Show Vigit help", intent = "show_help" },
+  { id = "help.open", modes = { "n" }, lhs = "?", contexts = { "diff", "changes", "comments", "prompt", "comment_editor" }, group = "lifecycle", description = "Show Vigit help", intent = "show_help" },
   { id = "help.close", modes = { "n" }, lhs = "q", contexts = { "help" }, group = "lifecycle", description = "Close Vigit help", intent = "close" },
   { id = "help.escape", modes = { "n" }, lhs = "<Esc>", contexts = { "help" }, group = "lifecycle", description = "Close Vigit help", intent = "close" },
 }

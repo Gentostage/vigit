@@ -26,7 +26,7 @@ reviewable inside one familiar Neovim environment:
 - normal source buffers and terminal splits with your existing LSP, mappings,
   jumplist, Telescope, and plugins;
 - tracked `.vigit/comments.md` feedback with stable anchors and agent replies;
-- a worktree picker with dirty, ahead, behind, and no-upstream state;
+- optional интеграция с менеджером worktree из Neovim config;
 - built-in contextual help and diagnostics with no required runtime plugins.
 
 The core loop is deliberately small:
@@ -78,7 +78,7 @@ Available commands:
 | Command | Purpose |
 | --- | --- |
 | `:Vigit [path]` | Open or restore the review workspace |
-| `:VigitWorktrees` | Open the worktree picker from any normal Neovim buffer |
+| `:VigitWorktrees` | Вызвать настроенный внешний менеджер worktree |
 | `:VigitComments` | Open comments for the active worktree |
 | `:VigitHelp` | Open contextual help |
 | `:VigitLog` | Open Vigit diagnostics |
@@ -87,8 +87,8 @@ Available commands:
 
 `:VigitV2` remains a temporary compatibility alias for `:Vigit`.
 
-To make the worktree picker available on `W` outside Vigit, add an optional
-global mapping to your Neovim config:
+После настройки `handlers.open_worktrees` можно вызвать внешний менеджер
+клавишей `W` вне Vigit через optional global mapping:
 
 ```lua
 vim.keymap.set("n", "W", function()
@@ -121,8 +121,11 @@ require("vigit").setup({
 
 Vigit uses the current native tab as a workspace and renders review UI as two
 floating windows over the normal editor layout. Every canonical worktree keeps
-an independent session, but only one session is visible and marked `ACTIVE` at
-a time. Switching worktrees does not create more Neovim tabs.
+an independent session. Одновременно видна одна review-сессия.
+`require("vigit").open({ cwd = root })` восстанавливает выбранный review в той
+же вкладке. Смена review root сохраняет пользовательские source buffers и
+работающие terminals. Vigit задаёт cwd только review tab; global cwd, другие
+tabs и существующие window-local cwd сохраняются.
 
 `e`, `gd`, and `T` hand control back to user-owned buffers:
 
@@ -135,9 +138,9 @@ Vigit does not add its own mappings, options, winbar, or lifecycle autocmds to
 source and terminal buffers. Run `:Vigit` to restore the review at its previous
 diff anchor. Press `q` inside Vigit to hide the review and return to code mode.
 Neovim's `:q` closes only the terminal window; the hidden terminal buffer and
-shell keep running. When switching worktrees, Vigit detects that exact terminal
-and asks `Stop Vigit terminal and switch worktree? (y/N)` before stopping it.
-Other terminal buffers are never affected.
+shell keep running. Открытие другого review root сохраняет terminal.
+Переключение обычного editor worktree и его safety checks принадлежат
+настроенному внешнему менеджеру.
 
 ## Essential keymaps
 
@@ -162,7 +165,7 @@ Other terminal buffers are never affected.
 | `c` | Add/edit a comment at the diff anchor |
 | `C` | Open the comment list |
 | `P` | Copy/show the prompt for open comments |
-| `W` | Open the worktree picker |
+| `W` | Вызвать настроенный внешний менеджер worktree |
 | `r` | Refresh Git state |
 | `?` | Open context-aware help |
 | `q` | Hide Vigit and return to code mode |
@@ -217,33 +220,78 @@ Install the bundled Codex workflow with:
 The skill preserves unknown Markdown and comments owned by other reviewers. It
 does not stage, commit, push, or remove worktrees without an explicit request.
 
-## Safe worktree removal
+## Интеграция с внешним менеджером worktree
 
-Press `W` to open the picker. It distinguishes `ROOT` and linked `WT` entries
-and shows branch, changed-file count, and upstream state. Network fetches are
-never hidden; press `F` to fetch explicitly.
+Vigit проверяет изменения в выбранном root и хранит review-сессии по canonical
+root. Выбор worktree, fetch, удаление и переключение обычного редактора
+реализуются в Neovim config или отдельном plugin. Встроенного менеджера нет.
 
-`d` removes a linked worktree when all safety checks pass:
+`vigit.worktrees({ cwd = path })`, `:VigitWorktrees` и `W` внутри Vigit
+разрешают canonical root и синхронно вызывают optional handler:
 
-- Git status is clean;
-- a verified upstream has `ahead == 0`; a missing or unavailable upstream adds
-  a warning to the confirmation instead of blocking removal;
-- no loaded source buffer belongs to that worktree;
-- the repeated preflight after `y` returns the same safe result.
+```lua
+require("vigit").setup({
+  handlers = {
+    open_worktrees = function(context)
+      -- context = { root = "/canonical/root", mode = "review" | "code" }
+      return require("custom.worktrees").open({
+        cwd = context.root,
+        on_select = context.mode == "review" and function(root)
+          require("vigit").open({ cwd = root })
+        end or nil,
+      })
+    end,
+  },
+})
+```
 
-Press `D` to force-remove a dirty worktree. The `y/N` confirmation shows its
-`S/M/?` counts and warns that local changes will be discarded. Force removal
-only bypasses the clean-status requirement: `ROOT`, locked worktrees,
-unpublished ahead commits, and loaded source buffers remain protected.
+`custom.worktrees` в примере принадлежит пользовательскому config. Vigit не
+импортирует этот module. Handler получает plain table только с `root` и `mode`,
+без Session, Workspace и callback `done`. Режим `review` означает видимый review
+в текущей вкладке; из обычного editor buffer передаётся `code`. В code mode root
+разрешается по текущему source buffer, затем по cwd. Явный `cwd` имеет приоритет.
 
-When `d` targets a prunable entry whose directory or `.git` link has already
-disappeared, Vigit offers to run Git's stale-metadata cleanup instead of probing
-the missing directory. Git may prune other stale records in the same repository,
-which is stated in the confirmation.
+Handler синхронно инициирует внешний picker. `vigit.worktrees()` возвращает его
+первое значение, включая `false`, или `true`, если handler вернул `nil` без
+ошибки. `nil, Error` или `false, Error` возвращаются caller как `nil, Error`;
+некорректная форма ошибки нормализуется в `handler_failed`.
+Отсутствующий либо отключённый (`false`) handler возвращает
+`nil, Error{code="handler_unavailable"}`. Исключение handler перехватывается и
+возвращается как `nil, Error{code="handler_failed"}`. Ошибка разрешения root
+возвращается до вызова handler. Команда и `W` показывают эти ошибки пользователю.
 
-Vigit removes only the inactive cached session, keeps the Git branch, and never
-closes source buffers or unrelated terminal splits. A running Vigit terminal is
-stopped only after the explicit worktree-switch confirmation described above.
+Перед подтверждением удаления root и повторно непосредственно перед Git
+mutation внешний host проверяет, можно ли освободить его review:
+
+```lua
+local allowed, error = require("vigit").can_close({ cwd = target_root })
+```
+
+`can_close` синхронно возвращает `true`, если session отсутствует или её можно
+закрыть, либо `nil, Error`. Проверки совпадают с `close`: active Git mutation,
+несохранённый Vigit comment editor и invalid input блокируют операцию. Guard
+ничего не закрывает и не меняет UI, cwd, session state, buffers или terminals.
+Host выполняет удаление только после успешной проверки.
+
+После успешного удаления root host освобождает только его review-сессию:
+
+```lua
+local closed, error = require("vigit").close({ cwd = removed_root })
+```
+
+`close` возвращает `true` при освобождении session и `false`, если её нет.
+Абсолютный root может уже отсутствовать на диске: он сопоставляется с cached
+session без поиска родительского repository. Закрытие active session скрывает
+её UI; другие sessions, source buffers, terminals и editor cwd сохраняются.
+Активная Git mutation и несохранённый Vigit comment editor возвращают typed
+ошибку, сохраняя session. Hook удаления принадлежит host, Vigit не подписывается
+на manager-specific events.
+
+Для обычного review handler не нужен:
+
+```lua
+require("vigit").open({ cwd = "/path/to/worktree" })
+```
 
 ## Quick demo
 
@@ -256,7 +304,8 @@ cd vigit
 The disposable fixture creates a root and four linked worktrees containing
 staged and unstaged long files, mixed hunks, staged deletion, untracked files,
 tracked open/completed comments, and safe, dirty, ahead, and no-upstream states.
-Everything is removed after Neovim exits.
+Откройте другой fixture root через `:Vigit /path/to/worktree`; внешний picker
+доступен после настройки handler. Everything is removed after Neovim exits.
 
 ```bash
 ./scripts/demo.sh --user-config  # use your normal config and plugins

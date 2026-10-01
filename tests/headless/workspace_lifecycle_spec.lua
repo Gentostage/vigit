@@ -81,10 +81,17 @@ local function cleanup_terminals()
   end
 end
 
-it("публикует workspace root для global, tab и process consumers", function()
+it("привязывает review root к tab и сохраняет global cwd, другой tab и window cwd", function()
   local repo = Fixture.new()
   local original_global = vim.fn.getcwd(-1, -1)
   local original_tab = vim.fn.getcwd(0, 0)
+  local workspace_tab = vim.api.nvim_get_current_tabpage()
+  local workspace_window = vim.api.nvim_get_current_win()
+  vim.cmd("tabnew")
+  local external_tab = vim.api.nvim_get_current_tabpage()
+  local external_cwd = vim.fn.getcwd()
+  vim.api.nvim_set_current_tabpage(workspace_tab)
+  vim.cmd("lcd " .. vim.fn.fnameescape(original_global))
   local group = vim.api.nvim_create_augroup("VigitRootInvariantSpec", {
     clear = true,
   })
@@ -94,8 +101,7 @@ it("публикует workspace root для global, tab и process consumers", 
     callback = function()
       observed[#observed + 1] = {
         global = vim.fn.getcwd(-1, -1),
-        tab = vim.fn.getcwd(0, 0),
-        process = vim.uv.cwd(),
+        tab = vim.fn.getcwd(-1, 0),
       }
     end,
   })
@@ -107,17 +113,48 @@ it("публикует workspace root для global, tab и process consumers", 
     )
     assert_truthy(rooted.ok)
     local expected = assert(vim.uv.fs_realpath(repo.root))
-    assert_equal(vim.fn.getcwd(-1, -1), expected)
-    assert_equal(vim.fn.getcwd(0, 0), expected)
-    assert_equal(vim.uv.cwd(), expected)
+    assert_equal(vim.fn.getcwd(-1, -1), original_global)
+    assert_equal(vim.fn.getcwd(-1, 0), expected)
+    assert_equal(vim.fn.getcwd(), original_global)
+    assert_equal(vim.fn.haslocaldir(), 1)
+    assert_equal(vim.api.nvim_win_get_buf(workspace_window), vim.api.nvim_get_current_buf())
+    vim.api.nvim_set_current_tabpage(external_tab)
+    assert_equal(vim.fn.getcwd(), external_cwd)
+    vim.api.nvim_set_current_tabpage(workspace_tab)
     assert_truthy(#observed >= 1)
-    assert_equal(observed[1].global, expected)
-    assert_equal(observed[1].process, expected)
+    assert_equal(observed[1].global, original_global)
   end, debug.traceback)
 
   vim.api.nvim_del_augroup_by_id(group)
+  vim.api.nvim_set_current_tabpage(external_tab)
+  vim.cmd("tabclose")
+  vim.api.nvim_set_current_tabpage(workspace_tab)
   vim.cmd("cd " .. vim.fn.fnameescape(original_global))
   vim.cmd("tcd " .. vim.fn.fnameescape(original_tab))
+  repo:cleanup()
+  if not ok then error(message, 0) end
+end)
+
+it("восстанавливает tab и window cwd после ошибки привязки review root", function()
+  local repo = Fixture.new()
+  local global_cwd = vim.fn.getcwd(-1, -1)
+  local original_cwd = vim.fn.getcwd()
+  local original_set_var = vim.api.nvim_tabpage_set_var
+  local tab = vim.api.nvim_get_current_tabpage()
+  vim.cmd("tcd " .. vim.fn.fnameescape(original_cwd))
+  vim.cmd("lcd " .. vim.fn.fnameescape(global_cwd))
+  local ok, message = xpcall(function()
+    vim.api.nvim_tabpage_set_var = function() error("metadata failure") end
+    local rooted = neovim.bind_workspace_root(tab, repo.root)
+    assert_equal(rooted.ok, false)
+    assert_equal(rooted.error.code, "workspace_root_failed")
+    assert_equal(vim.fn.getcwd(-1, -1), global_cwd)
+    assert_equal(vim.fn.getcwd(-1, 0), original_cwd)
+    assert_equal(vim.fn.getcwd(), global_cwd)
+    assert_equal(vim.fn.haslocaldir(), 1)
+  end, debug.traceback)
+  vim.api.nvim_tabpage_set_var = original_set_var
+  vim.cmd("tcd " .. vim.fn.fnameescape(original_cwd))
   repo:cleanup()
   if not ok then error(message, 0) end
 end)
@@ -436,7 +473,7 @@ it("повторный T фокусирует существующий workspace
   end
 end)
 
-it("блокирует switch, пока workspace terminal process работает", function()
+it("открывает другой review root и сохраняет работающий terminal первого root", function()
   local repo_a = Fixture.new()
   local repo_b = Fixture.new()
   local session
@@ -458,17 +495,12 @@ it("блокирует switch, пока workspace terminal process работа�
     local switch_error
     switched, switch_error = v2.open({ cwd = repo_b.root })
 
-    assert_equal(switched, nil)
-    assert_equal(switch_error.code, "running_terminal")
-    assert_equal(v2.active_session(), session)
+    assert_truthy(switched)
+    assert_equal(switch_error, nil)
+    assert_equal(v2.active_session(), switched)
     assert_equal(vim.fn.jobwait({ terminal_job }, 0)[1], -1)
-
-    local stopped = neovim.stop_workspace_terminal(session.workspace)
-    assert_equal(stopped.ok, true)
-    assert_equal(session.resources.terminal, nil)
-    assert_truthy(vim.fn.jobwait({ terminal_job }, 1000)[1] ~= -1)
-
-    switched = assert(v2.open({ cwd = repo_b.root }))
+    assert_equal(session.resources.terminal.job, terminal_job)
+    assert_equal(vim.api.nvim_buf_is_valid(session.resources.terminal.buf), true)
     assert_equal(switched.root, assert(vim.uv.fs_realpath(repo_b.root)))
   end, debug.traceback)
 
@@ -482,11 +514,12 @@ it("блокирует switch, пока workspace terminal process работа�
   end
 end)
 
-it("блокирует switch при modified source buffer без потери текста", function()
+it("открывает другой review root и сохраняет modified source buffer без потери текста", function()
   local repo_a = Fixture.new()
   local repo_b = Fixture.new()
   local session
   local source_buffer
+  local switched
 
   local ok, message = xpcall(function()
     prepare_changed_file(
@@ -507,13 +540,15 @@ it("блокирует switch при modified source buffer без потери 
       { "unsaved = true" }
     )
 
-    local switched, switch_error = v2.open({ cwd = repo_b.root })
+    local switch_error
+    switched, switch_error = v2.open({ cwd = repo_b.root })
 
-    assert_equal(switched, nil)
-    assert_equal(switch_error.code, "modified_source_buffers")
-    assert_equal(v2.active_session(), session)
+    assert_truthy(switched)
+    assert_equal(switch_error, nil)
+    assert_equal(v2.active_session(), switched)
     assert_equal(session.root, assert(vim.uv.fs_realpath(repo_a.root)))
     assert_equal(session.closed, false)
+    assert_equal(vim.bo[source_buffer].modified, true)
     assert_equal(
       vim.api.nvim_buf_get_lines(source_buffer, 0, -1, false)[1],
       "unsaved = true"
@@ -524,6 +559,7 @@ it("блокирует switch при modified source buffer без потери 
     vim.bo[source_buffer].modified = false
   end
   close_session(session)
+  close_session(switched)
   if source_buffer and vim.api.nvim_buf_is_valid(source_buffer) then
     pcall(vim.api.nvim_buf_delete, source_buffer, { force = true })
   end
@@ -573,13 +609,14 @@ it("сохраняет unmodified user source buffer после успешног
   end
 end)
 
-it("блокирует switch, если source buffer показан во внешнем tab", function()
+it("открывает другой review root и сохраняет source buffer во внешнем tab", function()
   local repo_a = Fixture.new()
   local repo_b = Fixture.new()
   local session
   local source_buffer
   local workspace_tab
   local external_tab
+  local switched
 
   local ok, message = xpcall(function()
     prepare_changed_file(
@@ -598,13 +635,15 @@ it("блокирует switch, если source buffer показан во вне
     external_tab = vim.api.nvim_get_current_tabpage()
     vim.api.nvim_win_set_buf(vim.api.nvim_get_current_win(), source_buffer)
 
-    local switched, switch_error = v2.open({ cwd = repo_b.root })
+    local switch_error
+    switched, switch_error = v2.open({ cwd = repo_b.root })
 
-    assert_equal(switched, nil)
-    assert_equal(switch_error.code, "source_buffer_in_external_tab")
-    assert_equal(session.workspace:active_session(), session)
+    assert_truthy(switched)
+    assert_equal(switch_error, nil)
+    assert_equal(session.workspace:active_session(), switched)
     assert_equal(vim.api.nvim_buf_is_valid(source_buffer), true)
-    assert_equal(vim.api.nvim_get_current_tabpage(), external_tab)
+    assert_equal(vim.api.nvim_get_current_tabpage(), workspace_tab)
+    assert_equal(vim.api.nvim_win_get_buf(vim.api.nvim_tabpage_get_win(external_tab)), source_buffer)
   end, debug.traceback)
 
   if external_tab and vim.api.nvim_tabpage_is_valid(external_tab) then
@@ -615,6 +654,7 @@ it("блокирует switch, если source buffer показан во вне
     vim.api.nvim_set_current_tabpage(workspace_tab)
   end
   close_session(session)
+  close_session(switched)
   if source_buffer and vim.api.nvim_buf_is_valid(source_buffer) then
     pcall(vim.api.nvim_buf_delete, source_buffer, { force = true })
   end

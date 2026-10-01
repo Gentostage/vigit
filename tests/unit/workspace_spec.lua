@@ -25,9 +25,6 @@ local function fake_dependencies()
     canonicalize = function(path)
       return path:gsub("/+$", "")
     end,
-    inspect = function()
-      return Result.ok(true)
-    end,
     set_root = function(_, root)
       calls.roots[#calls.roots + 1] = root
       return Result.ok(root)
@@ -102,7 +99,7 @@ it("держит одну active session и восстанавливает ло�
   assert_equal(workspace:mode_name(), "review")
 end)
 
-it("не уничтожает active session, когда inspection блокирует switch", function()
+it("меняет только review session и не инспектирует user editor resources", function()
   local deps, calls = fake_dependencies()
   local blocker = Result.err(
     "modified_source_buffers",
@@ -117,10 +114,10 @@ it("не уничтожает active session, когда inspection блокир
 
   local result = workspace:switch("/repo-b")
 
-  assert_equal(result, blocker)
-  assert_equal(workspace:active_session(), active)
+  assert_truthy(result.ok)
+  assert_equal(workspace:active_session().root, "/repo-b")
   assert_equal(active.closed, false)
-  assert_equal(#calls.hidden, 0)
+  assert_equal(#calls.hidden, 1)
   assert_equal(#calls.disposed, 0)
 end)
 
@@ -188,19 +185,4 @@ it("закрывает только active session и очищает workspace s
   assert_equal(workspace:mode_name(), "closed")
   assert_equal(calls.disposed, { first, second })
   assert_equal(workspace:close(), false)
-end)
-
-it("удаляет только inactive session из workspace", function()
-  local deps, calls = fake_dependencies()
-  local workspace = Workspace.new(deps)
-  local first = assert(workspace:open("/repo-a").value)
-  local second = assert(workspace:switch("/repo-b").value)
-
-  assert_truthy(workspace:remove_session("/repo-a"))
-  assert_equal(first.closed, true)
-  assert_equal(second.closed, false)
-  assert_equal(workspace:active_session(), second)
-  assert_equal(workspace:all_sessions(), { second })
-  assert_equal(calls.disposed, { first })
-  assert_equal(workspace:remove_session("/repo-b"), false)
 end)

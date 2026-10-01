@@ -56,6 +56,7 @@ local schema = {
     open_file = "handler",
     open_terminal = "handler",
     goto_definition = "handler",
+    open_worktrees = "handler",
   },
   keymaps = "table",
 }

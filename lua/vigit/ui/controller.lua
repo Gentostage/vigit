@@ -68,7 +68,7 @@ function M.configure(opts)
     goto_definition = opts.goto_definition,
     open_terminal = opts.open_terminal,
     reviews = opts.reviews,
-    worktrees = opts.worktrees,
+    open_worktrees = opts.open_worktrees,
   }
   return previous
 end
@@ -922,6 +922,11 @@ local function cancel_handler_requests(session)
   end
 end
 
+function M.release(session)
+  refresh_requests[session] = nil
+  cancel_handler_requests(session)
+end
+
 local function complete_handler(session, action, request, result)
   local requests = handler_requests[session]
   if session.closed or not requests or requests[action] ~= request then
@@ -1264,8 +1269,8 @@ function M.dispatch(session, intent)
       terminal_context
     )
   elseif name == "open_worktrees" then
-    if context.worktrees and type(context.worktrees.open) == "function" then
-      context.worktrees.open(session)
+    if type(context.open_worktrees) == "function" then
+      context.open_worktrees(session)
     end
   elseif name == "show_help" then
     local current = vim.api.nvim_get_current_win()

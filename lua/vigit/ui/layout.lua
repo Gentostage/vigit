@@ -229,7 +229,8 @@ function M.hide(session)
   session.owned.diff_win = nil
 
   local workspace = session.workspace
-  if workspace then
+  if workspace and (type(workspace.active_session) ~= "function"
+      or workspace:active_session() == session) then
     workspace.mode = "code"
     if workspace.tab and vim.api.nvim_tabpage_is_valid(workspace.tab) then
       vim.api.nvim_set_current_tabpage(workspace.tab)
@@ -336,7 +337,11 @@ function M.dispose(session)
   session.closed = true
   session.reads.generation = session.reads.generation + 1
   cancel_reads(session)
-  for _, key in ipairs({ "diff_buf", "changes_buf" }) do
+  for _, key in ipairs({ "comments_win", "comment_editor_win", "prompt_win" }) do
+    close_window(session.owned[key])
+    session.owned[key] = nil
+  end
+  for _, key in ipairs({ "diff_buf", "changes_buf", "comments_buf", "comment_editor_buf", "prompt_buf" }) do
     local buffer = session.owned[key]
     session.owned[key] = nil
     if valid_buffer(buffer) then

@@ -49,7 +49,6 @@ function M.new(opts)
     },
     resources = {
       source_buffers = {},
-      last_source_buffer = nil,
       terminal = nil,
       autocmds = {},
     },

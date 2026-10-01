@@ -8,8 +8,6 @@ local cleanup_callbacks = {}
 local default_files = {
   "tests/integration/process_spec.lua",
   "tests/integration/git_read_spec.lua",
-  "tests/integration/git_worktree_read_spec.lua",
-  "tests/integration/git_worktree_remove_spec.lua",
   "tests/integration/demo_fixture_spec.lua",
   "tests/integration/git_file_mutations_spec.lua",
   "tests/integration/git_hunk_mutations_spec.lua",

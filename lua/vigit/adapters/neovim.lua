@@ -25,20 +25,6 @@ local function canonical_path(path)
   return vim.uv.fs_realpath(path)
 end
 
-local function absolute_path(path)
-  if is_windows then
-    return path:match("^%a:[/\\\\]") ~= nil
-      or path:sub(1, 2) == "\\\\"
-      or path:sub(1, 2) == "//"
-  end
-  return path:sub(1, 1) == "/"
-end
-
-local function missing_path(path)
-  local stat, _, code = vim.uv.fs_lstat(path)
-  return stat == nil and code == "ENOENT"
-end
-
 local function source_label(context)
   local branch = context.branch
   if type(branch) ~= "string" or branch == "" then
@@ -125,66 +111,35 @@ function M.bind_workspace_root(workspace_or_tab, root)
     )
   end
   if not tab or not vim.api.nvim_tabpage_is_valid(tab) then
-    return Result.err(
-      "workspace_root_failed",
-      "Workspace tab is unavailable"
-    )
+    return Result.err("workspace_root_failed", "Workspace tab is unavailable")
   end
-
-  local previous_tab = vim.api.nvim_get_current_tabpage()
-  local previous_global = vim.fn.getcwd(-1, -1)
   local window = workspace and workspace_window(workspace) or normal_window(tab)
   if not window then
-    return Result.err(
-      "workspace_root_failed",
-      "Workspace window is unavailable"
-    )
+    return Result.err("workspace_root_failed", "Workspace window is unavailable")
   end
-  local previous_tab_cwd = vim.api.nvim_win_call(window, function()
-    return vim.fn.getcwd(0, 0)
+
+  local previous_tab_cwd = vim.fn.getcwd(-1, vim.api.nvim_tabpage_get_number(tab))
+  local window_cwd = vim.api.nvim_win_call(window, function()
+    if vim.fn.haslocaldir() == 1 then return vim.fn.getcwd() end
   end)
-
-  local ok, message = xpcall(function()
-    vim.api.nvim_set_current_tabpage(tab)
+  local function bind_tab(path)
     vim.api.nvim_win_call(window, function()
-      -- `nvim_set_current_dir()` only updates the current local directory when
-      -- `:tcd` is active. Use `:cd` first so process-wide integrations
-      -- (terminal, Telescope, NvimTree) observe the same root, then pin the
-      -- workspace tab. `nvim_win_call()` preserves the user's focused window.
-      vim.cmd("cd " .. vim.fn.fnameescape(canonical_root))
-      vim.cmd("tcd " .. vim.fn.fnameescape(canonical_root))
+      vim.cmd("tcd " .. vim.fn.fnameescape(path))
+      if window_cwd then vim.cmd("lcd " .. vim.fn.fnameescape(window_cwd)) end
     end)
-
-    local effective_cwd = vim.api.nvim_win_call(window, function()
-      return vim.fn.getcwd(0, 0)
-    end)
-    if canonical_path(vim.fn.getcwd(-1, -1)) ~= canonical_root
-        or canonical_path(effective_cwd) ~= canonical_root
-        or canonical_path(vim.uv.cwd()) ~= canonical_root then
-      error("workspace cwd invariant was not established")
+  end
+  local ok, message = xpcall(function()
+    bind_tab(canonical_root)
+    local tab_cwd = vim.fn.getcwd(-1, vim.api.nvim_tabpage_get_number(tab))
+    if canonical_path(tab_cwd) ~= canonical_root then
+      error("workspace tab cwd was not established")
     end
     vim.api.nvim_tabpage_set_var(tab, "vigit_root", canonical_root)
     vim.api.nvim_tabpage_set_var(tab, "vigit_role", "workspace")
   end, debug.traceback)
-
   if not ok then
-    pcall(vim.cmd, "cd " .. vim.fn.fnameescape(previous_global))
-    if vim.api.nvim_tabpage_is_valid(tab) then
-      pcall(vim.api.nvim_set_current_tabpage, tab)
-      if vim.api.nvim_win_is_valid(window) then
-        pcall(vim.api.nvim_win_call, window, function()
-          vim.cmd("tcd " .. vim.fn.fnameescape(previous_tab_cwd))
-        end)
-      end
-    end
-    if vim.api.nvim_tabpage_is_valid(previous_tab) then
-      pcall(vim.api.nvim_set_current_tabpage, previous_tab)
-    end
-    return Result.err(
-      "workspace_root_failed",
-      "Unable to bind the workspace root",
-      message
-    )
+    if vim.api.nvim_win_is_valid(window) then pcall(bind_tab, previous_tab_cwd) end
+    return Result.err("workspace_root_failed", "Unable to bind the workspace root", message)
   end
   return Result.ok(canonical_root)
 end
@@ -218,55 +173,6 @@ function M.find_repo_root(path)
   return Result.ok(canonical)
 end
 
-function M.loaded_source_buffers(root)
-  local canonical_root = canonical_path(root)
-  if not canonical_root then
-    return Result.err(
-      "repository_root_unavailable",
-      "Repository root cannot be canonicalized",
-      root
-    )
-  end
-
-  local buffers = {}
-  for _, buffer in ipairs(vim.api.nvim_list_bufs()) do
-    if vim.api.nvim_buf_is_valid(buffer)
-        and vim.api.nvim_buf_is_loaded(buffer)
-        and vim.bo[buffer].buftype == "" then
-      local name = vim.api.nvim_buf_get_name(buffer)
-      if name ~= "" then
-        if missing_path(name)
-            and absolute_path(name)
-            and not is_within(canonical_root, name) then
-          goto continue
-        end
-        local path = canonical_path(name)
-        if not path then
-          return Result.err(
-            "source_buffer_unavailable",
-            "Loaded source buffer cannot be canonicalized",
-            name
-          )
-        end
-        if is_within(canonical_root, path) then
-          buffers[#buffers + 1] = {
-            buf = buffer,
-            path = path,
-          }
-        end
-      end
-      ::continue::
-    end
-  end
-  table.sort(buffers, function(first, second)
-    if first.path == second.path then
-      return first.buf < second.buf
-    end
-    return first.path < second.path
-  end)
-  return Result.ok(buffers)
-end
-
 function M.remember_source_buffer(resources, root, buffer)
   if type(resources) ~= "table"
       or type(root) ~= "string"
@@ -285,167 +191,7 @@ function M.remember_source_buffer(resources, root, buffer)
   end
   resources.source_buffers = resources.source_buffers or {}
   resources.source_buffers[buffer] = path
-  resources.last_source_buffer = buffer
   return true
-end
-
-local function remembered_source_buffer(session)
-  local resources = session and session.resources or {}
-  local buffer = resources.last_source_buffer
-  if not buffer
-      or not vim.api.nvim_buf_is_valid(buffer)
-      or not vim.api.nvim_buf_is_loaded(buffer)
-      or vim.bo[buffer].buftype ~= "" then
-    return nil
-  end
-  local path = resources.source_buffers and resources.source_buffers[buffer]
-  local canonical_root = canonical_path(session.root)
-  if type(path) ~= "string"
-      or not canonical_root
-      or not is_within(canonical_root, path) then
-    return nil
-  end
-  return buffer
-end
-
-local function mirrored_source_buffer(target_root, source_root, source_buffer)
-  if type(target_root) ~= "string"
-      or type(source_root) ~= "string"
-      or not source_buffer
-      or not vim.api.nvim_buf_is_valid(source_buffer)
-      or not vim.api.nvim_buf_is_loaded(source_buffer)
-      or vim.bo[source_buffer].buftype ~= "" then
-    return nil
-  end
-  local source_name = vim.api.nvim_buf_get_name(source_buffer)
-  if source_name == "" then return nil end
-
-  local source_path = canonical_path(source_name)
-  local canonical_source_root = canonical_path(source_root)
-  local canonical_target_root = canonical_path(target_root)
-  if not source_path
-      or not canonical_source_root
-      or not canonical_target_root
-      or not is_within(canonical_source_root, source_path) then
-    return nil
-  end
-
-  local relative = vim.fs.relpath(canonical_source_root, source_path)
-  if not relative or relative == "" or relative == "." then return nil end
-  local target_path = canonical_path(vim.fs.joinpath(
-    canonical_target_root,
-    relative
-  ))
-  if not target_path or not is_within(canonical_target_root, target_path) then
-    return nil
-  end
-  local stat = vim.uv.fs_stat(target_path)
-  if not stat or stat.type ~= "file" then return nil end
-
-  local buffer = vim.fn.bufadd(target_path)
-  vim.fn.bufload(buffer)
-  vim.bo[buffer].buflisted = true
-  return buffer
-end
-
-function M.source_buffer_kind(root, buffer)
-  if type(root) ~= "string"
-      or not buffer
-      or not vim.api.nvim_buf_is_valid(buffer)
-      or not vim.api.nvim_buf_is_loaded(buffer)
-      or vim.bo[buffer].buftype ~= "" then
-    return nil
-  end
-  local path = canonical_path(vim.api.nvim_buf_get_name(buffer))
-  local canonical_root = canonical_path(root)
-  local stat = path and vim.uv.fs_stat(path) or nil
-  if path == canonical_root and stat and stat.type == "directory" then
-    return "directory"
-  end
-  if path and canonical_root and stat and stat.type == "file"
-      and is_within(canonical_root, path) then
-    return "file"
-  end
-end
-
-function M.editor_source(workspace, root, current_buffer)
-  local candidates = { current_buffer }
-  if type(workspace) == "table"
-      and workspace.code_win
-      and vim.api.nvim_win_is_valid(workspace.code_win) then
-    candidates[#candidates + 1] = vim.api.nvim_win_get_buf(workspace.code_win)
-  end
-  local seen = {}
-  for _, buffer in ipairs(candidates) do
-    if buffer and not seen[buffer] then
-      seen[buffer] = true
-      local kind = M.source_buffer_kind(root, buffer)
-      if kind then return buffer, kind end
-    end
-  end
-  return nil, nil
-end
-
-local function directory_source_buffer(target_root, source_kind)
-  if source_kind ~= "directory" then return nil end
-  local target_path = canonical_path(target_root)
-  local stat = target_path and vim.uv.fs_stat(target_path) or nil
-  if not stat or stat.type ~= "directory" then return nil end
-  local buffer = vim.fn.bufadd(target_path)
-  vim.fn.bufload(buffer)
-  vim.bo[buffer].buflisted = true
-  return buffer
-end
-
-function M.show_editor(session, workspace, opts)
-  opts = opts or {}
-  local result
-  local ok, message = xpcall(function()
-    local buffer = remembered_source_buffer(session)
-      or mirrored_source_buffer(
-        session.root,
-        opts.source_root,
-        opts.source_buffer
-      )
-      or directory_source_buffer(session.root, opts.source_kind)
-    if not buffer then
-      result = Result.ok(nil)
-      return
-    end
-    local window = workspace_window(workspace)
-    if not window then error("Vigit workspace is unavailable") end
-    vim.api.nvim_set_current_tabpage(workspace.tab)
-    vim.api.nvim_set_current_win(window)
-    vim.api.nvim_win_set_buf(window, buffer)
-    M.remember_source_buffer(session.resources, session.root, buffer)
-    result = Result.ok({
-      tab = workspace.tab,
-      win = window,
-      buf = buffer,
-    })
-  end, debug.traceback)
-  if not ok then
-    result = Result.err(
-      "editor_restore_failed",
-      "Unable to restore the selected worktree editor",
-      message
-    )
-  end
-  return result
-end
-
-local function buffer_visible_in_other_tab(buffer, workspace_tab)
-  for _, tab in ipairs(vim.api.nvim_list_tabpages()) do
-    if tab ~= workspace_tab and vim.api.nvim_tabpage_is_valid(tab) then
-      for _, window in ipairs(vim.api.nvim_tabpage_list_wins(tab)) do
-        if vim.api.nvim_win_is_valid(window)
-            and vim.api.nvim_win_get_buf(window) == buffer then
-          return true
-        end
-      end
-    end
-  end
-  return false
 end
 
 local function running_job(job)
@@ -464,123 +210,6 @@ local function visible_buffer_window(tab, buffer)
       return window
     end
   end
-end
-
-local function active_workspace_session(workspace)
-  if type(workspace) ~= "table" then return nil end
-  return type(workspace.active_session) == "function"
-      and workspace:active_session()
-    or workspace.session
-end
-
-function M.inspect_workspace(workspace)
-  if type(workspace) ~= "table" then
-    return Result.err(
-      "workspace_unavailable",
-      "Workspace resources are unavailable"
-    )
-  end
-
-  local session = type(workspace.active_session) == "function"
-      and workspace:active_session()
-    or workspace.session
-  local resources = session and session.resources or {}
-  local modified = {}
-  local external = {}
-  for buffer, path in pairs(resources.source_buffers or {}) do
-    if vim.api.nvim_buf_is_valid(buffer)
-        and vim.api.nvim_buf_is_loaded(buffer) then
-      if vim.bo[buffer].modified then
-        modified[#modified + 1] = path
-      elseif buffer_visible_in_other_tab(buffer, workspace.tab) then
-        external[#external + 1] = path
-      end
-    end
-  end
-  table.sort(modified)
-  table.sort(external)
-
-  if #modified > 0 then
-    return Result.err(
-      "modified_source_buffers",
-      "Save modified files before switching worktree",
-      modified
-    )
-  end
-  if #external > 0 then
-    return Result.err(
-      "source_buffer_in_external_tab",
-      "Close source windows outside the workspace tab before switching",
-      external
-    )
-  end
-  if resources.terminal and running_job(resources.terminal.job) then
-    return Result.err(
-      "running_terminal",
-      "Exit the workspace terminal before switching worktree"
-    )
-  end
-  return Result.ok(true)
-end
-
-function M.stop_workspace_terminal(workspace)
-  local session = active_workspace_session(workspace)
-  local resources = session and session.resources
-  local terminal = resources and resources.terminal
-  if not terminal then return Result.ok(false) end
-
-  if running_job(terminal.job) then
-    local ok, stopped = pcall(vim.fn.jobstop, terminal.job)
-    if not ok or stopped ~= 1 then
-      return Result.err(
-        "terminal_stop_failed",
-        "Unable to stop the Vigit terminal",
-        stopped
-      )
-    end
-    local waited_ok, statuses = pcall(vim.fn.jobwait, { terminal.job }, 1000)
-    if not waited_ok or statuses[1] == -1 then
-      return Result.err(
-        "terminal_stop_failed",
-        "Vigit terminal did not stop in time",
-        statuses
-      )
-    end
-  end
-
-  if terminal.win and vim.api.nvim_win_is_valid(terminal.win) then
-    local window_buffer = vim.api.nvim_win_get_buf(terminal.win)
-    if window_buffer == terminal.buf then
-      local closed, close_error = pcall(
-        vim.api.nvim_win_close,
-        terminal.win,
-        true
-      )
-      if not closed then
-        return Result.err(
-          "terminal_close_failed",
-          "Unable to close the Vigit terminal window",
-          close_error
-        )
-      end
-    end
-  end
-  if terminal.buf and vim.api.nvim_buf_is_valid(terminal.buf) then
-    local deleted, delete_error = pcall(
-      vim.api.nvim_buf_delete,
-      terminal.buf,
-      { force = true }
-    )
-    if not deleted then
-      return Result.err(
-        "terminal_close_failed",
-        "Unable to delete the Vigit terminal buffer",
-        delete_error
-      )
-    end
-  end
-  resources.terminal = nil
-  return Result.ok(true)
 end
 
 function M.open_file(context, done)

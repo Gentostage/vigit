@@ -312,8 +312,8 @@ printf 'Secondary worktree: %s\n' "$SECONDARY_DIR"
 printf 'Removable worktree: %s\n' "$REMOVABLE_DIR"
 printf 'Ahead worktree: %s\n' "$AHEAD_DIR"
 printf 'No-upstream worktree: %s\n' "$NO_UPSTREAM_DIR"
-printf '%s\n' 'Try worktrees: press W, select WT demo-secondary, then press Enter.'
-printf '%s\n' 'Try safe removal: select WT demo-removable, press d, then press y.'
+printf 'Try another review: :Vigit %s\n' "$SECONDARY_DIR"
+printf '%s\n' 'W invokes your optional handlers.open_worktrees integration.'
 printf '%s\n' 'Try comments: press C in demo-secondary, then Enter/e/d.'
 printf '%s\n' 'Close Neovim to remove it.'
 

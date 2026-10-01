@@ -39,14 +39,14 @@ it("registers single and double mouse actions only for Vigit panes", function()
   assert_equal(mouse["<LeftMouse>"].hint, false)
 end)
 
-it("разделяет safe и force удаление worktree", function()
-  local by_lhs = {}
-  for _, entry in ipairs(keymaps.for_context("worktrees")) do
-    by_lhs[entry.lhs] = entry
-  end
-
-  assert_equal(by_lhs.d.intent, "remove_worktree")
-  assert_equal(by_lhs.D.intent, "force_remove_worktree")
+it("даёт W только owned review contexts и не публикует mappings внешнего manager", function()
+  assert_equal(keymaps.for_context("worktrees"), {})
+  local by_id = {}
+  for _, entry in ipairs(keymaps.entries()) do by_id[entry.id] = entry end
+  assert_equal(by_id["worktrees.open"].intent, "open_worktrees")
+  assert_equal(table.concat(by_id["worktrees.open"].contexts, ","),
+    "diff,changes,comments,prompt,comment_editor")
+  assert_equal(table.concat(by_id["view.toggle_focus"].contexts, ","), "diff,changes")
 end)
 
 it("omits disabled mappings from a context", function()
@@ -94,11 +94,11 @@ it("документирует русские aliases для оконной на
 end)
 
 it("builds display-width-safe auxiliary hints from active mappings", function()
-  local hints = keymaps.hints("worktrees", 16, {
-    keymaps = { ["worktrees.fetch"] = false },
+  local hints = keymaps.hints("comments", 16, {
+    keymaps = { ["comments.edit"] = false },
   })
 
   assert_truthy(keymaps.display_width(hints) <= 16)
-  assert_equal(hints:find("fetch", 1, true), nil)
+  assert_equal(hints:find("edit", 1, true), nil)
   assert_equal(keymaps.display_width("界"), 2)
 end)

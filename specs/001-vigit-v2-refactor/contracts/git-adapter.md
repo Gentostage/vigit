@@ -28,15 +28,15 @@ ProcessOutput = {
 `args` MUST быть array. String command отклоняется. `Job.cancel()` посылает
 termination signal, но caller всё равно проверяет generation.
 
+Выбор, fetch и удаление worktree находятся во внешнем менеджере Neovim.
+Vigit Git adapter обслуживает только review указанного root.
+
 ## Read API
 
 ```lua
 git.status(root, callback)               -- Result<Status>
 git.diff(root, change, context, callback) -- Result<FileDiff>
 git.snapshot(root, change, side, callback) -- Result<string>
-git.worktrees(root, callback)            -- Result<Worktree[]>
-git.upstream(root, callback)             -- Result<Upstream>
-git.fetch(root, callback)                -- Result<true>
 ```
 
 Commands:
@@ -46,9 +46,6 @@ git -C <root> status --porcelain=v2 --branch -z --untracked-files=all
 git -C <root> diff --no-ext-diff --unified=<n> -- <path>
 git -C <root> diff --cached --no-ext-diff --unified=<n> -- <path>
 git -C <root> show <revision>:<path>
-git -C <root> worktree list --porcelain -z
-git -C <root> rev-list --left-right --count @{upstream}...HEAD
-git -C <root> fetch --prune <upstream-remote>
 ```
 
 Untracked diff строится как synthetic FileDiff из filesystem content; внешний
@@ -63,7 +60,6 @@ git.stage_hunk(root, file_diff, hunk, callback)
 git.unstage_hunk(root, file_diff, hunk, callback)
 git.restore_hunk(root, file_diff, hunk, callback)
 git.restore_file(root, change, callback)
-git.remove_worktree(repo_root, target_root, callback)
 ```
 
 Hunk flow:
@@ -88,7 +84,6 @@ rejects an intent when selected `change_id`/`hunk_id` is no longer present.
 | `diff_too_large` | stdout exceeded configured file limit |
 | `stale_change` | Model identity disappeared before mutation |
 | `patch_conflict` | `git apply --check` rejected patch |
-| `unsafe_worktree` | Removal preflight returned blocker |
 
 Diagnostic details include argument list, cwd, exit code and stderr, but never
 shell-escaped reconstructed execution.

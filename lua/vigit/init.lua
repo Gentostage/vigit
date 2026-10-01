@@ -5,7 +5,6 @@ local neovim = require("vigit.adapters.neovim")
 local Changes = require("vigit.application.changes")
 local Reviews = require("vigit.application.reviews")
 local Workspace = require("vigit.application.workspace")
-local Worktrees = require("vigit.application.worktrees")
 local config = require("vigit.config")
 local Result = require("vigit.core.result")
 local controller = require("vigit.ui.controller")
@@ -15,7 +14,6 @@ local registry_module = require("vigit.ui.registry")
 local renderer = require("vigit.ui.renderer")
 local RenderQueue = require("vigit.ui.render_queue")
 local Session = require("vigit.ui.session")
-local worktrees_view = require("vigit.ui.views.worktrees")
 local log = require("vigit.ui.log")
 
 local M = {}
@@ -27,7 +25,6 @@ local registry = registry_module.new(function(path)
 end)
 local git = Git.new(process)
 local changes
-local worktrees
 local workspace
 local reconciled_generation = setmetatable({}, { __mode = "k" })
 local pending_refreshes = setmetatable({}, { __mode = "k" })
@@ -232,6 +229,14 @@ changes = Changes.new({
   end,
 })
 
+local function notify_error(error)
+  vim.notify(
+    string.format("[%s] %s", error.code, error.message),
+    vim.log.levels.ERROR,
+    { title = "Vigit" }
+  )
+end
+
 controller.configure({
   changes = changes,
   registry = registry,
@@ -239,11 +244,11 @@ controller.configure({
   open_file = neovim.open_file,
   goto_definition = neovim.goto_definition,
   open_terminal = neovim.open_terminal,
-  worktrees = {
-    open = function(session)
-      return M.worktrees({ session = session })
-    end,
-  },
+  open_worktrees = function(session)
+    local returned, error = M.worktrees({ cwd = session.root })
+    if error then notify_error(error) end
+    return returned
+  end,
 })
 
 local function current_workspace()
@@ -263,14 +268,6 @@ local function current_path()
       and buffer_path ~= ""
       and not buffer_path:match("^%a+://") then
     return buffer_path, "code_buffer"
-  end
-  local active = current_workspace()
-  if active and active.root then
-    local source_buffer = neovim.editor_source(active, active.root, buffer)
-    if source_buffer then
-      return vim.api.nvim_buf_get_name(source_buffer), "workspace_source"
-    end
-    return active.root, "workspace_root"
   end
   return vim.fn.getcwd(0, 0), "effective_cwd"
 end
@@ -319,84 +316,16 @@ local function resolve_invocation_root(opts)
     record_root_resolution(source, path, resolved.value, mode)
     return resolved
   end
-  if active_session then
-    record_root_resolution("session_fallback", path, active_session.root, mode)
-    return Result.ok(active_session.root)
+  if source == "code_buffer" then
+    local cwd = vim.fn.getcwd(0, 0)
+    local fallback = neovim.find_repo_root(cwd)
+    if fallback.ok then
+      record_root_resolution("effective_cwd", cwd, fallback.value, mode)
+    end
+    return fallback
   end
   return resolved
 end
-
-local function worktree_root(path, callback)
-  vim.schedule(function()
-    callback(neovim.find_repo_root(path))
-  end)
-  return { cancel = function() end }
-end
-
-worktrees = Worktrees.new({
-  git = git,
-  registry = registry,
-  neovim = {
-    canonical_root = worktree_root,
-    loaded_source_buffers = neovim.loaded_source_buffers,
-    platform = package.config:sub(1, 1) == "\\" and "win32" or "posix",
-  },
-  concurrency = 4,
-  switch_session = function(root, opts)
-    local previous_root = workspace and workspace.root or nil
-    local session, open_error = M.open({
-      cwd = root,
-      source = "worktree_picker",
-      skip_switch_event = true,
-    })
-    if session then
-      if opts and opts.mode == "code" then
-        local restored = neovim.show_editor(session, workspace, {
-          source_root = opts.source_root,
-          source_buffer = opts.source_buffer,
-          source_kind = opts.source_kind,
-        })
-        if not restored.ok then return restored end
-        if restored.value then
-          local code_mode = workspace:show_code()
-          if not code_mode.ok then return code_mode end
-        end
-      end
-      if previous_root ~= session.root then
-        log.event("session_switch", {
-          source = "worktree_picker",
-          from_root = previous_root,
-          to_root = session.root,
-          mode = opts and opts.mode or "review",
-          session_id = session.id,
-        })
-      end
-      return Result.ok(session)
-    end
-    return Result.err(
-      (open_error and open_error.code) or "worktree_missing",
-      (open_error and open_error.message) or "Worktree no longer exists",
-      open_error
-    )
-  end,
-  stop_terminal = function()
-    if not workspace then
-      return Result.err(
-        "workspace_unavailable",
-        "Vigit workspace is unavailable"
-      )
-    end
-    return neovim.stop_workspace_terminal(workspace)
-  end,
-  active_root = function()
-    return workspace and workspace.root or nil
-  end,
-  close_session = function(session)
-    if workspace then
-      workspace:remove_session(session.root)
-    end
-  end,
-})
 
 local function normal_window(tab)
   for _, window in ipairs(vim.api.nvim_tabpage_list_wins(tab)) do
@@ -447,6 +376,7 @@ end
 
 local function dispose_session(session)
   content_renders:cancel(session)
+  controller.release(session)
   renderer.clear(session)
   layout.dispose(session)
   registry:remove(session.id)
@@ -486,7 +416,6 @@ local function ensure_workspace()
     canonicalize = function(path)
       return path
     end,
-    inspect = neovim.inspect_workspace,
     set_root = set_workspace_root,
     create_session = create_session,
     mount = mount_session,
@@ -554,66 +483,117 @@ function M.active_session()
   return workspace:active_session()
 end
 
+local function session_for_close(opts)
+  if type(opts) ~= "table" or type(opts.cwd) ~= "string"
+      or opts.cwd == "" or opts.cwd:find("\0", 1, true) then
+    return nil, Result.err(
+      "invalid_options",
+      "close.cwd must be a non-empty root path"
+    ).error
+  end
+  local absolute = vim.fn.fnamemodify(opts.cwd, ":p")
+  local path = normalized_path(vim.uv.fs_realpath(absolute) or absolute)
+  path = path:gsub("/+$", "")
+  local session
+  for _, candidate in ipairs(registry:all()) do
+    if normalized_path(candidate.root):gsub("/+$", "") == path then
+      session = candidate
+      break
+    end
+  end
+  return session and not session.closed and session or nil
+end
+
+local function close_blocker(session)
+  if not session then return nil end
+  if session.mutations.active then
+    return Result.err(
+      "mutation_in_progress",
+      "Wait for the review mutation before closing this session"
+    ).error
+  end
+  local editor = session.owned.comment_editor_buf
+  if editor and vim.api.nvim_buf_is_valid(editor) and vim.bo[editor].modified then
+    return Result.err(
+      "modified_comment_editor",
+      "Save or close the modified Vigit comment before closing this session"
+    ).error
+  end
+end
+
+function M.can_close(opts)
+  local session, error = session_for_close(opts)
+  error = error or close_blocker(session)
+  if error then return nil, error end
+  return true
+end
+
+function M.close(opts)
+  local session, error = session_for_close(opts)
+  error = error or close_blocker(session)
+  if error then return nil, error end
+  if not session then return false end
+  local active = session.workspace
+  if active and type(active.close_session) == "function" then
+    return active:close_session(session.root)
+  end
+  dispose_session(session)
+  return true
+end
+
 function M.worktrees(opts)
   opts = opts or {}
-  local session = opts.session
-  local active = workspace and workspace:active_session() or nil
-  local return_mode = invocation_mode()
+  local mode = invocation_mode()
   local root_result = resolve_invocation_root({
     cwd = opts.cwd,
-    mode = return_mode,
-    source = "worktree_picker",
+    mode = mode,
+    source = "worktree_handler",
   })
   if not root_result.ok then
     log.push(root_result.error)
     return nil, root_result.error
   end
-  local root = root_result.value
-  local context_session = workspace and workspace.sessions[root] or nil
-  if not context_session and session and not session.closed and session.root == root then
-    context_session = session
-  elseif not context_session and active and active.root == root then
-    context_session = active
+  local handler = config.get().handlers.open_worktrees
+  if type(handler) ~= "function" then
+    local error = Result.err(
+      "handler_unavailable",
+      "Configure handlers.open_worktrees to open an external worktree manager"
+    ).error
+    log.push(error)
+    return nil, error
   end
-  local source_buffer
-  local source_kind
-  if return_mode == "code" then
-    source_buffer, source_kind = neovim.editor_source(
-      workspace,
-      root,
-      vim.api.nvim_get_current_buf()
-    )
+
+  local ok, returned, handler_error = xpcall(function()
+    return handler({ root = root_result.value, mode = mode })
+  end, debug.traceback)
+  if not ok then
+    local error = Result.err(
+      "handler_failed",
+      "External worktree manager handler failed",
+      returned
+    ).error
+    log.push(error)
+    return nil, error
   end
-  if return_mode == "code" and context_session and not context_session.closed then
-    neovim.remember_source_buffer(
-      context_session.resources,
-      context_session.root,
-      source_buffer
-    )
+  if (returned == nil or returned == false) and handler_error ~= nil then
+    local error = handler_error
+    if type(error) ~= "table" or type(error.code) ~= "string" or error.code == ""
+        or type(error.message) ~= "string" or error.message == "" then
+      error = Result.err(
+        "handler_failed",
+        "External worktree manager returned an invalid error",
+        handler_error
+      ).error
+    end
+    log.push(error)
+    return nil, error
   end
-  local origin = context_session or { root = root, closed = false }
-  return worktrees_view.open({
-    app = worktrees,
-    origin = origin,
-    origin_tab = vim.api.nvim_get_current_tabpage(),
-    return_mode = return_mode,
-    source_root = root,
-    source_buffer = source_buffer,
-    source_kind = source_kind,
-    selected_path = root,
-  })
+  if returned == nil then return true end
+  return returned
 end
 
 function M.help(context)
   return require("vigit.ui.views.help").open(context)
-end
-
-local function notify_error(error)
-  vim.notify(
-    string.format("[%s] %s", error.code, error.message),
-    vim.log.levels.ERROR,
-    { title = "Vigit" }
-  )
 end
 
 local function open_command(opts)
@@ -708,11 +688,11 @@ function M.setup(opts)
     desc = "Compatibility alias for :Vigit",
   })
   vim.api.nvim_create_user_command("VigitWorktrees", function()
-    local _, worktree_error = M.worktrees({ session = M.active_session() })
+    local _, worktree_error = M.worktrees()
     if worktree_error then notify_error(worktree_error) end
   end, {
     force = true,
-    desc = "Open the Vigit worktree picker",
+    desc = "Open the configured external worktree manager",
   })
   vim.api.nvim_create_user_command("VigitComments", open_comments, {
     force = true,
